@@ -1,0 +1,1631 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OBLVN, Secure Data Obliteration</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700;1,900&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400;1,600&family=DM+Sans:ital,wght@0,200;0,300;0,400;1,200&family=IBM+Plex+Mono:wght@300;400&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --ink: #1a2218;
+      --ink-mid: #1f2a1d;
+      --moss: #2e3a2b;
+      --sage: #4a5442;
+      --cream: #f5e6c8;
+      --cream-2: #ede0c4;
+      --cream-dark: #d4c9a8;
+      --parchment: #c4b48a;
+      --ink-line: rgba(240, 235, 224, 0.05);
+      --serif: 'Playfair Display', serif;
+      --script: 'Cormorant Garamond', serif;
+      --sans: 'DM Sans', sans-serif;
+      --mono: 'IBM Plex Mono', monospace;
+    }
+
+    *,
+    *::before,
+    *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background: var(--ink);
+      color: var(--cream);
+      font-family: var(--sans);
+      overflow-x: hidden;
+      cursor: crosshair;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 998;
+      pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      opacity: 0.7;
+    }
+
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 28px 52px;
+      transition: background 0.4s ease;
+    }
+
+    nav.nav--light {
+      background: rgba(237, 224, 196, 0.92);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(26, 34, 24, 0.08);
+    }
+
+    .nav-l {
+      font-family: var(--mono);
+      font-size: 9.5px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      line-height: 1.7;
+      color: rgba(240, 235, 224, 0.28);
+      transition: color 0.4s ease;
+    }
+
+    nav.nav--light .nav-l {
+      color: rgba(26, 34, 24, 0.45);
+    }
+
+    .nav-r {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 5px;
+    }
+
+    .nav-links {
+      list-style: none;
+      display: flex;
+      gap: 32px;
+    }
+
+    .nav-links a {
+      font-family: var(--mono);
+      font-size: 9.5px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      text-decoration: none;
+      color: rgba(240, 235, 224, 0.28);
+      transition: color 0.4s ease;
+    }
+
+    nav.nav--light .nav-links a {
+      color: rgba(26, 34, 24, 0.45);
+    }
+
+    .nav-links a:hover {
+      color: var(--cream);
+    }
+
+    nav.nav--light .nav-links a:hover {
+      color: var(--ink);
+    }
+
+    .nav-pip {
+      width: 4px;
+      height: 4px;
+      background: var(--parchment);
+      opacity: 0.5;
+      animation: pip 3s ease-in-out infinite;
+      transition: background 0.4s ease;
+    }
+
+    nav.nav--light .nav-pip {
+      background: var(--sage);
+    }
+
+    @keyframes pip {
+
+      0%,
+      100% {
+        opacity: .5
+      }
+
+      50% {
+        opacity: .1
+      }
+    }
+
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 0 52px 72px;
+      overflow: hidden;
+      background: var(--ink);
+    }
+
+    .hero-canvas {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .grid-h {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--ink-line);
+    }
+
+    .grid-v {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: var(--ink-line);
+    }
+
+    .c-conc {
+      position: absolute;
+      top: 6%;
+      left: 4%;
+      width: 360px;
+      height: 360px;
+      opacity: 0.75;
+    }
+
+    .c-halftone {
+      position: absolute;
+      top: 80px;
+      left: 52px;
+      display: grid;
+      grid-template-columns: repeat(22, 20px);
+      grid-template-rows: repeat(14, 20px);
+      gap: 4px;
+    }
+
+    .c-halftone span {
+      display: block;
+      background: var(--cream);
+    }
+
+    .c-rectgrid {
+      position: absolute;
+      top: 28%;
+      right: 8%;
+      display: grid;
+      grid-template-columns: repeat(4, 28px);
+      gap: 6px;
+    }
+
+    .c-rectgrid span {
+      display: block;
+      height: 28px;
+      background: rgba(240, 235, 224, 0.04);
+    }
+
+    .c-rectgrid span:nth-child(3n) {
+      background: rgba(240, 235, 224, 0.07);
+    }
+
+    .c-rectgrid span:nth-child(5) {
+      background: rgba(74, 84, 66, 0.4);
+    }
+
+    .c-watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -55%);
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: clamp(180px, 28vw, 380px);
+      line-height: 1;
+      letter-spacing: -0.04em;
+      color: rgba(240, 235, 224, 0.022);
+      white-space: nowrap;
+      pointer-events: none;
+      user-select: none;
+      font-style: italic;
+    }
+
+    .c-tris {
+      position: absolute;
+      bottom: 200px;
+      left: 52px;
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    .c-tris span {
+      display: block;
+      width: 0;
+      height: 0;
+      border-left: 10px solid transparent;
+      border-right: 10px solid transparent;
+      border-bottom: 17px solid rgba(240, 235, 224, 0.06);
+    }
+
+    .c-vtext {
+      position: absolute;
+      top: 50%;
+      right: 52px;
+      transform: translateY(-50%) rotate(90deg);
+      transform-origin: center center;
+      font-family: var(--mono);
+      font-size: 8px;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: rgba(240, 235, 224, 0.12);
+      white-space: nowrap;
+    }
+
+    .hero-id {
+      position: absolute;
+      right: 140px;
+      top: 42%;
+      transform: translateY(-50%);
+      text-align: right;
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: rgba(240, 235, 224, 0.18);
+      line-height: 1.9;
+    }
+
+    .hero-title {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: clamp(92px, 15.5vw, 206px);
+      line-height: 0.88;
+      letter-spacing: -0.02em;
+      color: var(--cream);
+      position: relative;
+      z-index: 2;
+    }
+
+    .hero-title .t1 {
+      display: block;
+    }
+
+    .hero-title .t2 {
+      display: block;
+      padding-left: 11%;
+      color: var(--cream-dark);
+      position: relative;
+    }
+
+    .hero-title .t2-script {
+      position: absolute;
+      top: -28px;
+      left: 14%;
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-style: italic;
+      font-size: clamp(32px, 4vw, 54px);
+      color: rgba(196, 180, 138, 0.42);
+      pointer-events: none;
+      white-space: nowrap;
+      letter-spacing: 0.01em;
+    }
+
+    .hero-sub {
+      margin-top: 44px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 40px;
+      align-items: end;
+      position: relative;
+      z-index: 2;
+    }
+
+    .hero-desc {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 10.5px;
+      line-height: 1.9;
+      letter-spacing: 0.04em;
+      color: rgba(240, 235, 224, 0.38);
+      max-width: 360px;
+    }
+
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      justify-content: flex-end;
+    }
+
+    .btn-solid {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--ink);
+      background: var(--cream);
+      padding: 14px 34px;
+      text-decoration: none;
+      cursor: crosshair;
+      box-shadow: 3px 3px 0 var(--sage);
+      transition: all .15s;
+      display: inline-block;
+    }
+
+    .btn-solid:hover {
+      transform: translate(-2px, -2px);
+      box-shadow: 5px 5px 0 var(--sage);
+    }
+
+    .btn-ghost {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: rgba(240, 235, 224, 0.35);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(240, 235, 224, 0.14);
+      padding-bottom: 2px;
+      transition: color .2s, border-color .2s;
+    }
+
+    .btn-ghost:hover {
+      color: var(--cream);
+      border-color: var(--cream);
+    }
+
+    .ticker {
+      overflow: hidden;
+      white-space: nowrap;
+      padding: 10px 0;
+      background: var(--cream-2);
+      border-top: 1px solid rgba(26, 34, 24, 0.15);
+    }
+
+    .ticker-t {
+      display: inline-block;
+      animation: tick 32s linear infinite;
+      font-family: var(--mono);
+      font-size: 8.5px;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: rgba(26, 34, 24, 0.55);
+    }
+
+    @keyframes tick {
+      from {
+        transform: translateX(0)
+      }
+
+      to {
+        transform: translateX(-50%)
+      }
+    }
+
+    .ticker-t span {
+      padding: 0 36px;
+    }
+
+    .ticker-t .sep {
+      color: rgba(26, 34, 24, 0.25);
+      padding: 0;
+    }
+
+    .p2 {
+      background: var(--cream);
+      color: var(--ink);
+      padding: 112px 52px;
+      position: relative;
+      overflow: hidden;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+    }
+
+    .p2::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image: radial-gradient(circle, rgba(26, 34, 24, 0.055) 1px, transparent 1px);
+      background-size: 18px 18px;
+    }
+
+    .p2-ghost-num {
+      position: absolute;
+      right: -20px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-family: var(--serif);
+      font-style: italic;
+      font-weight: 900;
+      font-size: clamp(280px, 36vw, 480px);
+      color: rgba(26, 34, 24, 0.04);
+      line-height: 1;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .p2-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 100px;
+      align-items: center;
+      position: relative;
+      z-index: 2;
+      width: 100%;
+    }
+
+    .p2-head {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: clamp(56px, 7.5vw, 104px);
+      line-height: 0.9;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin-bottom: 36px;
+    }
+
+    .p2-head em {
+      font-style: italic;
+      color: var(--sage);
+    }
+
+    .p2-intro {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 11px;
+      line-height: 1.9;
+      letter-spacing: 0.04em;
+      color: rgba(26, 34, 24, 0.5);
+      max-width: 380px;
+    }
+
+    .methods-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .method-item {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 20px;
+      padding: 28px 0;
+      border-bottom: 1px solid rgba(26, 34, 24, 0.08);
+      align-items: start;
+    }
+
+    .mi-num {
+      font-family: var(--serif);
+      font-style: italic;
+      font-size: 28px;
+      font-weight: 400;
+      color: rgba(26, 34, 24, 0.2);
+      line-height: 1;
+    }
+
+    .mi-title {
+      font-family: var(--serif);
+      font-weight: 700;
+      font-size: 20px;
+      color: var(--ink);
+      margin-bottom: 8px;
+      line-height: 1.1;
+    }
+
+    .mi-body {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 10px;
+      line-height: 1.85;
+      letter-spacing: 0.04em;
+      color: rgba(26, 34, 24, 0.45);
+    }
+
+    .mi-std {
+      margin-top: 10px;
+      font-family: var(--mono);
+      font-size: 8px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(26, 34, 24, 0.28);
+      border-left: 2px solid rgba(74, 84, 66, 0.4);
+      padding-left: 10px;
+      line-height: 1.8;
+    }
+
+    .p-how {
+      background: var(--ink);
+      color: var(--cream);
+      padding: 120px 52px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .p-how::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image: radial-gradient(circle, rgba(240, 235, 224, 0.025) 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+
+    .p-how-layout {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 100px;
+      align-items: start;
+      position: relative;
+      z-index: 2;
+    }
+
+    .p-how-head {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: clamp(52px, 7vw, 88px);
+      line-height: 0.9;
+      letter-spacing: -0.02em;
+      color: var(--cream);
+      margin-bottom: 24px;
+    }
+
+    .p-how-head em {
+      font-style: italic;
+      color: rgba(196, 180, 138, 0.7);
+    }
+
+    .p-how-sub {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 11px;
+      line-height: 1.9;
+      letter-spacing: 0.04em;
+      color: rgba(240, 235, 224, 0.35);
+      max-width: 320px;
+    }
+
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 28px;
+      padding: 36px 0;
+      border-bottom: 1px solid rgba(240, 235, 224, 0.06);
+      align-items: start;
+    }
+
+    .step:first-child {
+      padding-top: 0;
+    }
+
+    .step-n {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: clamp(48px, 5vw, 72px);
+      line-height: 0.85;
+      letter-spacing: -0.04em;
+      color: rgba(240, 235, 224, 0.08);
+    }
+
+    .step-body {}
+
+    .step-title {
+      font-family: var(--serif);
+      font-weight: 700;
+      font-size: 22px;
+      color: var(--cream);
+      margin-bottom: 10px;
+      line-height: 1.1;
+    }
+
+    .step-text {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 10.5px;
+      line-height: 1.9;
+      letter-spacing: 0.04em;
+      color: rgba(240, 235, 224, 0.4);
+      max-width: 420px;
+    }
+
+    .step-tag {
+      margin-top: 12px;
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 7.5px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: rgba(196, 180, 138, 0.5);
+      border: 1px solid rgba(196, 180, 138, 0.2);
+      padding: 5px 12px;
+    }
+
+    .p3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    .p3-l {
+      background: var(--ink-mid);
+      padding: 100px 52px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .p3-r {
+      background: var(--cream-2);
+      padding: 100px 52px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .p3-r::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image: radial-gradient(circle, rgba(26, 34, 24, 0.05) 1px, transparent 1px);
+      background-size: 15px 15px;
+    }
+
+    .p3-zero-pct {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-style: normal;
+      font-size: clamp(80px, 11vw, 148px);
+      line-height: 0.9;
+      letter-spacing: -0.04em;
+      color: var(--cream);
+    }
+
+    .p3-stat-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      color: rgba(240, 235, 224, 0.3);
+      margin-top: 12px;
+      margin-bottom: 48px;
+    }
+
+    .p3-feats {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .p3-feat {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 18px 0;
+      border-top: 1px solid rgba(240, 235, 224, 0.07);
+    }
+
+    .p3-feat-n {
+      font-family: var(--mono);
+      font-size: 8px;
+      letter-spacing: 0.2em;
+      color: rgba(240, 235, 224, 0.2);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .p3-feat-txt {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      color: rgba(240, 235, 224, 0.45);
+      line-height: 1.7;
+    }
+
+    .p3-pullquote {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-style: italic;
+      font-size: clamp(32px, 4vw, 52px);
+      color: rgba(26, 34, 24, 0.35);
+      line-height: 1.15;
+      margin-bottom: 40px;
+      letter-spacing: 0.01em;
+    }
+
+    .p3-r-head {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: clamp(40px, 5.5vw, 72px);
+      line-height: 0.92;
+      letter-spacing: -0.015em;
+      color: var(--ink);
+      margin-bottom: 32px;
+    }
+
+    .p3-r-head em {
+      font-style: italic;
+      color: var(--sage);
+    }
+
+    .p3-r-body {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 10.5px;
+      line-height: 1.95;
+      letter-spacing: 0.04em;
+      color: rgba(26, 34, 24, 0.5);
+      max-width: 380px;
+      margin-bottom: 44px;
+    }
+
+    .p3-r-content {
+      position: relative;
+      z-index: 2;
+    }
+
+    .cert {
+      background: var(--ink);
+      padding: 32px;
+      position: relative;
+      box-shadow: 5px 5px 0 rgba(74, 84, 66, 0.6);
+    }
+
+    .cert-logo {
+      font-family: var(--serif);
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--cream);
+      letter-spacing: -0.01em;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid rgba(240, 235, 224, 0.08);
+    }
+
+    .cf {
+      margin-bottom: 10px;
+    }
+
+    .cf label {
+      display: block;
+      font-family: var(--mono);
+      font-size: 6.5px;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: rgba(240, 235, 224, 0.22);
+      margin-bottom: 3px;
+    }
+
+    .cf value {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--cream);
+      display: block;
+      letter-spacing: 0.03em;
+    }
+
+    .cert-hash {
+      background: rgba(74, 84, 66, 0.2);
+      padding: 10px 12px;
+      margin: 14px 0;
+      font-family: var(--mono);
+      font-size: 7px;
+      letter-spacing: 0.06em;
+      color: rgba(240, 235, 224, 0.4);
+      word-break: break-all;
+      line-height: 1.7;
+    }
+
+    .cert-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid rgba(240, 235, 224, 0.07);
+      padding-top: 12px;
+      font-family: var(--mono);
+      font-size: 7.5px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .cert-ok {
+      color: var(--parchment);
+    }
+
+    .cert-tx {
+      color: rgba(240, 235, 224, 0.2);
+    }
+
+    .p4 {
+      background: var(--cream);
+      color: var(--ink);
+      padding: 112px 52px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .p4::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 40%;
+      background-image: radial-gradient(circle, rgba(26, 34, 24, 0.05) 1px, transparent 1px);
+      background-size: 14px 14px;
+      pointer-events: none;
+    }
+
+    .p4-ghost-word {
+      position: absolute;
+      bottom: -30px;
+      left: -10px;
+      font-family: var(--serif);
+      font-weight: 900;
+      font-style: italic;
+      font-size: clamp(120px, 17vw, 220px);
+      line-height: 1;
+      color: rgba(26, 34, 24, 0.035);
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    .p4-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 100px;
+    }
+
+    .p4-head {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: clamp(52px, 7vw, 88px);
+      line-height: 0.9;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin-bottom: 48px;
+    }
+
+    .p4-head em {
+      font-style: italic;
+      color: var(--sage);
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      margin-bottom: 52px;
+    }
+
+    .badge {
+      border: 1px solid rgba(26, 34, 24, 0.2);
+      padding: 9px 18px;
+      font-family: var(--serif);
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      color: var(--ink);
+      cursor: default;
+    }
+
+    .badge.on {
+      background: var(--sage);
+      color: var(--cream);
+      border-color: var(--sage);
+    }
+
+    .rules {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .rule {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 20px;
+      padding: 22px 0;
+      border-bottom: 1px solid rgba(26, 34, 24, 0.08);
+      align-items: start;
+    }
+
+    .rule-n {
+      font-family: var(--serif);
+      font-style: italic;
+      font-size: 18px;
+      color: rgba(26, 34, 24, 0.2);
+    }
+
+    .rule-t {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 10px;
+      line-height: 1.85;
+      letter-spacing: 0.04em;
+      color: rgba(26, 34, 24, 0.5);
+    }
+
+    .p4-quote {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-style: italic;
+      font-size: clamp(36px, 5vw, 62px);
+      color: rgba(26, 34, 24, 0.28);
+      line-height: 1.1;
+      margin-bottom: 52px;
+      letter-spacing: 0.01em;
+    }
+
+    .p4-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 52px;
+    }
+
+    .p4-stat {
+      border-top: 1px solid rgba(26, 34, 24, 0.1);
+      padding-top: 16px;
+    }
+
+    .p4-stat-n {
+      font-family: var(--serif);
+      font-weight: 700;
+      font-style: normal;
+      font-size: 56px;
+      line-height: 1;
+      color: var(--ink);
+      display: block;
+      letter-spacing: -0.03em;
+    }
+
+    .p4-stat-l {
+      font-family: var(--mono);
+      font-size: 8px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: rgba(26, 34, 24, 0.3);
+      display: block;
+      margin-top: 4px;
+    }
+
+    .p5 {
+      background: var(--ink);
+      color: var(--cream);
+      padding: 120px 52px 60px;
+      position: relative;
+      overflow: hidden;
+      min-height: 80vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .p5-conc {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      opacity: 0.055;
+    }
+
+    .p5-stripe {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      height: 5px;
+    }
+
+    .p5-stripe span:nth-child(1) {
+      flex: 2;
+      background: var(--ink);
+    }
+
+    .p5-stripe span:nth-child(2) {
+      flex: 1;
+      background: rgba(74, 84, 66, 0.7);
+    }
+
+    .p5-stripe span:nth-child(3) {
+      flex: 1;
+      background: var(--cream);
+      opacity: 0.15;
+    }
+
+    .p5-stripe span:nth-child(4) {
+      flex: 3;
+      background: var(--ink);
+    }
+
+    .p5-stripe span:nth-child(5) {
+      flex: 1;
+      background: rgba(200, 196, 168, 0.2);
+    }
+
+    .p5-statement {
+      position: relative;
+      z-index: 2;
+      font-family: var(--serif);
+      font-weight: 300;
+      font-size: clamp(42px, 6.5vw, 88px);
+      line-height: 1.05;
+      letter-spacing: -0.01em;
+      color: var(--cream);
+      max-width: 780px;
+      margin: 0 auto 80px;
+      text-align: center;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .p5-statement em {
+      font-style: italic;
+      font-weight: 900;
+    }
+
+    .p5-statement .script-line {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-style: italic;
+      font-size: clamp(52px, 8.5vw, 118px);
+      color: rgba(240, 235, 224, 0.32);
+      display: block;
+      line-height: 1;
+      margin: 8px 0;
+      letter-spacing: 0.01em;
+    }
+
+    .p5-foot {
+      position: relative;
+      z-index: 2;
+      border-top: 1px solid rgba(240, 235, 224, 0.07);
+      padding-top: 44px;
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr;
+      gap: 60px;
+      margin-bottom: 44px;
+    }
+
+    .foot-brand {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: 44px;
+      letter-spacing: -0.02em;
+      color: var(--cream);
+      opacity: 0.12;
+    }
+
+    .foot-head {
+      font-family: var(--mono);
+      font-size: 8px;
+      letter-spacing: 0.26em;
+      text-transform: uppercase;
+      color: rgba(240, 235, 224, 0.2);
+      margin-bottom: 16px;
+    }
+
+    .foot-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .foot-list a {
+      font-family: var(--sans);
+      font-weight: 300;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(240, 235, 224, 0.28);
+      text-decoration: none;
+      transition: color .2s;
+    }
+
+    .foot-list a:hover {
+      color: var(--cream);
+    }
+
+    .foot-bottom {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid rgba(240, 235, 224, 0.06);
+      padding-top: 20px;
+    }
+
+    .foot-copy {
+      font-family: var(--mono);
+      font-size: 8px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(240, 235, 224, 0.18);
+    }
+
+    .foot-comp {
+      display: flex;
+      gap: 18px;
+      font-family: var(--mono);
+      font-size: 8px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(200, 196, 168, 0.35);
+    }
+
+    .sec-rule {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      margin-bottom: 72px;
+    }
+
+    .sec-rule-txt {
+      font-family: var(--mono);
+      font-size: 8.5px;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+      padding-right: 20px;
+    }
+
+    .sec-rule-line {
+      flex: 1;
+      height: 1px;
+    }
+
+    .sec-rule-num {
+      font-family: var(--serif);
+      font-style: italic;
+      font-size: 18px;
+      font-weight: 400;
+      padding-left: 20px;
+      flex-shrink: 0;
+    }
+
+    .sec-rule-dark .sec-rule-txt {
+      color: rgba(26, 34, 24, 0.3);
+    }
+
+    .sec-rule-dark .sec-rule-line {
+      background: rgba(26, 34, 24, 0.1);
+    }
+
+    .sec-rule-dark .sec-rule-num {
+      color: rgba(26, 34, 24, 0.25);
+    }
+
+    .sec-rule-cream .sec-rule-txt {
+      color: rgba(240, 235, 224, 0.22);
+    }
+
+    .sec-rule-cream .sec-rule-line {
+      background: rgba(240, 235, 224, 0.07);
+    }
+
+    .sec-rule-cream .sec-rule-num {
+      color: rgba(240, 235, 224, 0.18);
+    }
+  </style>
+</head>
+
+<body>
+
+  <nav id="mainNav">
+    <div class="nav-l">Secure Data Obliteration<br>Est. 2026, Worldwide</div>
+    <div class="nav-r">
+      <ul class="nav-links">
+        <li><a href="#methods">Methods</a></li>
+        <li><a href="#how">How It Works</a></li>
+        <li><a href="#compliance">Compliance</a></li>
+        <li><a href="/app/login">Sign In</a></li>
+      </ul>
+      <div class="nav-pip"></div>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="hero-canvas">
+      <div class="grid-h" style="top:22%"></div>
+      <div class="grid-h" style="top:44%"></div>
+      <div class="grid-h" style="top:66%"></div>
+      <div class="grid-v" style="left:33.33%"></div>
+      <div class="grid-v" style="left:66.66%"></div>
+      <svg class="c-conc" viewBox="0 0 340 340">
+        <circle cx="170" cy="170" r="18" fill="none" stroke="#f0ebe0" stroke-width="1" />
+        <circle cx="170" cy="170" r="42" fill="none" stroke="#f0ebe0" stroke-width="1" />
+        <circle cx="170" cy="170" r="70" fill="none" stroke="#f0ebe0" stroke-width="1" />
+        <circle cx="170" cy="170" r="100" fill="none" stroke="#f0ebe0" stroke-width="1" />
+        <circle cx="170" cy="170" r="132" fill="none" stroke="#f0ebe0" stroke-width=".8" />
+        <circle cx="170" cy="170" r="164" fill="none" stroke="#f0ebe0" stroke-width=".6" />
+      </svg>
+      <div class="c-halftone" id="heroDots"></div>
+      <div class="c-rectgrid" id="rectGrid"></div>
+      <div class="c-watermark">Oblvn</div>
+      <div class="c-tris" id="heroTris"></div>
+      <svg
+        style="position:absolute;bottom:140px;left:33.33%;transform:translateX(-50%);width:180px;height:180px;opacity:0.045"
+        viewBox="0 0 180 180">
+        <rect x="5" y="5" width="170" height="170" fill="none" stroke="#f0ebe0" stroke-width="1" />
+        <rect x="22" y="22" width="136" height="136" fill="none" stroke="#f0ebe0" stroke-width="1" />
+        <rect x="40" y="40" width="100" height="100" fill="none" stroke="#f0ebe0" stroke-width="1" />
+        <rect x="58" y="58" width="64" height="64" fill="none" stroke="#f0ebe0" stroke-width="1" />
+        <rect x="76" y="76" width="28" height="28" fill="none" stroke="#f0ebe0" stroke-width="1" />
+      </svg>
+      <div class="c-vtext">Obliteration Protocol, 2026, GDPR · HIPAA · NIST 800-88</div>
+    </div>
+    <div class="hero-id">OBLVN<br>SECURE OBLITERATION<br>PROTOCOL I</div>
+    <h1 class="hero-title">
+      <span class="t1">OBLVN</span>
+      <span class="t2">
+        <span class="t2-script">data, destroyed.</span>
+        DATA.
+      </span>
+    </h1>
+    <div class="hero-sub">
+      <p class="hero-desc">military-grade data destruction for hard drives, SSDs, USB flash storage and files. GDPR Art.
+        17. HIPAA certified. Bitcoin-anchored certificates of destruction.</p>
+      <div class="hero-actions">
+        <a href="#compliance" class="btn-ghost">View Compliance</a>
+        <a href="/app/login" class="btn-solid">Get Started</a>
+      </div>
+    </div>
+  </section>
+
+  <div class="ticker" aria-hidden="true">
+    <div class="ticker-t">
+      <span>DoD 5220.22-M</span><span class="sep">, </span><span>NIST 800-88</span><span class="sep">,
+      </span><span>HIPAA §164.310</span><span class="sep">, </span><span>GDPR Art. 17</span><span class="sep">,
+      </span><span>AES-256</span><span class="sep">, </span><span>Gutmann 35-Pass</span><span class="sep">,
+      </span><span>OpenTimestamps Bitcoin Proof</span><span class="sep">, </span><span>ISO 27001</span><span
+        class="sep">, </span><span>Zero Recovery Guaranteed</span><span class="sep">, </span>
+      <span>DoD 5220.22-M</span><span class="sep">, </span><span>NIST 800-88</span><span class="sep">,
+      </span><span>HIPAA §164.310</span><span class="sep">, </span><span>GDPR Art. 17</span><span class="sep">,
+      </span><span>AES-256</span><span class="sep">, </span><span>Gutmann 35-Pass</span><span class="sep">,
+      </span><span>OpenTimestamps Bitcoin Proof</span><span class="sep">, </span><span>ISO 27001</span><span
+        class="sep">, </span><span>Zero Recovery Guaranteed</span><span class="sep">, </span>
+    </div>
+  </div>
+
+  <section class="p2" id="methods">
+    <svg style="position:absolute;top:-80px;left:-80px;pointer-events:none;opacity:0.06" width="420" height="420"
+      viewBox="0 0 420 420">
+      <rect x="10" y="10" width="400" height="400" fill="none" stroke="#1a2218" stroke-width="1" />
+      <rect x="42" y="42" width="336" height="336" fill="none" stroke="#1a2218" stroke-width="1" />
+      <rect x="76" y="76" width="268" height="268" fill="none" stroke="#1a2218" stroke-width="1" />
+      <rect x="112" y="112" width="196" height="196" fill="none" stroke="#1a2218" stroke-width="1" />
+      <rect x="150" y="150" width="120" height="120" fill="none" stroke="#1a2218" stroke-width="1" />
+      <rect x="188" y="188" width="44" height="44" fill="none" stroke="#1a2218" stroke-width="1" />
+    </svg>
+    <div class="p2-ghost-num">01</div>
+    <div class="p2-layout">
+      <div>
+        <div class="sec-rule sec-rule-dark" style="margin-bottom:52px">
+          <span class="sec-rule-txt">Obliteration Methods</span>
+          <span class="sec-rule-line"></span>
+          <span class="sec-rule-num">01</span>
+        </div>
+        <h2 class="p2-head">Three<br>Ways to<br><em>Destroy.</em></h2>
+        <p class="p2-intro">no file system pointer removal. no temporary erasure. OBLVN overwrites, encrypts, and
+          verifies at the physical level, then issues legal proof it happened.</p>
+      </div>
+      <div class="methods-list">
+        <div class="method-item">
+          <div class="mi-num">01</div>
+          <div>
+            <div class="mi-title">Binary Obliteration</div>
+            <p class="mi-body">multi-pass overwrite replaces every magnetic bit. DoD 5220.22-M, Gutmann 35-pass, or NIST
+              800-88, auto-selected by device type. HDD and magnetic media.</p>
+            <div class="mi-std">DoD 5220.22-M · Gutmann · NIST 800-88</div>
+          </div>
+        </div>
+        <div class="method-item">
+          <div class="mi-num">02</div>
+          <div>
+            <div class="mi-title">Crypto Erasure</div>
+            <p class="mi-body">AES-256 encryption followed by key destruction ceremony. data becomes mathematically
+              indistinguishable from random noise. Recommended for SSDs and NVMe.</p>
+            <div class="mi-std">AES-256-CBC · FIPS 140-2 · SSD / NVMe</div>
+          </div>
+        </div>
+        <div class="method-item">
+          <div class="mi-num">03</div>
+          <div>
+            <div class="mi-title">Full Sanitization</div>
+            <p class="mi-body">overwrite passes, sector verification read-back, crypto seal. every byte confirmed.
+              S.M.A.R.T. snapshot captured. certificate issued and Bitcoin-anchored.</p>
+            <div class="mi-std">ISO 27001 · HIPAA §164.310 · SOC 2</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="p-how" id="how">
+    <div class="p-how-layout">
+      <div style="position:sticky;top:120px;">
+        <div class="sec-rule sec-rule-cream" style="margin-bottom:40px">
+          <span class="sec-rule-txt">How It Works</span>
+          <span class="sec-rule-line"></span>
+          <span class="sec-rule-num">02</span>
+        </div>
+        <h2 class="p-how-head">Six steps<br>to <em>zero.</em></h2>
+        <p class="p-how-sub">from connection to certificate, every action is logged, verified, and cryptographically
+          sealed. nothing is left to chance.</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-n">01</div>
+          <div class="step-body">
+            <div class="step-title">Connect your device</div>
+            <p class="step-text">attach a storage device to your machine or upload files directly in the browser. OBLVN
+              detects connected hardware automatically and reads S.M.A.R.T. health data before touching any sector.</p>
+            <span class="step-tag">Auto-detection · S.M.A.R.T. snapshot</span>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">02</div>
+          <div class="step-body">
+            <div class="step-title">Select your method</div>
+            <p class="step-text">choose Binary Obliteration, Crypto Erasure, or Full Sanitization. OBLVN recommends the
+              right standard for your device type automatically — DoD for HDDs, NIST for SSDs.</p>
+            <span class="step-tag">DoD 5220.22-M · NIST 800-88 · Gutmann 35-pass</span>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">03</div>
+          <div class="step-body">
+            <div class="step-title">Approval gate (optional)</div>
+            <p class="step-text">in organisations with the approval gate enabled, wipe jobs created by operators are
+              held in a pending state until a Team Lead or Org Admin authorises execution. full role separation.</p>
+            <span class="step-tag">Role-based access · Org Admin · Team Lead · Operator</span>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">04</div>
+          <div class="step-body">
+            <div class="step-title">Destruction executes</div>
+            <p class="step-text">the wipe runs on the machine with real-time progress streamed to the interface. every
+              pass is tracked. for crypto erasure, the AES-256 key is shown once for the key destruction ceremony, then
+              zeroed from memory using ctypes.memset.</p>
+            <span class="step-tag">AES-256 · Real-time progress · Key ceremony</span>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">05</div>
+          <div class="step-body">
+            <div class="step-title">Verification pass</div>
+            <p class="step-text">after overwriting completes, OBLVN runs a sector-by-sector read-back to confirm no
+              recoverable data remains. the result is included in the certificate as a pass or fail.</p>
+            <span class="step-tag">Read-back verification · Sector-level confirmation</span>
+          </div>
+        </div>
+        <div class="step" style="border-bottom:none;">
+          <div class="step-n">06</div>
+          <div class="step-body">
+            <div class="step-title">Certificate issued and anchored</div>
+            <p class="step-text">a tamper-proof PDF certificate is generated with the SHA-256 hash of the wipe, then
+              submitted to the Bitcoin blockchain via OpenTimestamps. the proof exists permanently, even if OBLVN
+              servers go offline.</p>
+            <span class="step-tag">SHA-256 · OpenTimestamps · Bitcoin permanence</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="p3">
+    <div class="p3-l">
+      <div style="position:relative;z-index:2">
+        <div class="sec-rule sec-rule-cream" style="margin-bottom:44px">
+          <span class="sec-rule-txt">Platform Features</span>
+          <span class="sec-rule-line"></span>
+          <span class="sec-rule-num">03</span>
+        </div>
+        <div class="p3-zero-pct">0%</div>
+        <div class="p3-stat-label">Recovery Rate. Guaranteed.</div>
+        <div class="p3-feats">
+          <div class="p3-feat"><span class="p3-feat-n">01</span><span class="p3-feat-txt">Auto device detection, HDD,
+              SSD, NVMe, USB, files</span></div>
+          <div class="p3-feat"><span class="p3-feat-n">02</span><span class="p3-feat-txt">S.M.A.R.T. health snapshot
+              before every wipe</span></div>
+          <div class="p3-feat"><span class="p3-feat-n">03</span><span class="p3-feat-txt">Role-based access, Admin, Team
+              Lead, Operator</span></div>
+          <div class="p3-feat"><span class="p3-feat-n">04</span><span class="p3-feat-txt">Immutable audit log,
+              append-only, cryptographically chained</span></div>
+          <div class="p3-feat"><span class="p3-feat-n">05</span><span class="p3-feat-txt">Anomaly detection, rule-based
+              and statistical layers</span></div>
+          <div class="p3-feat"><span class="p3-feat-n">06</span><span class="p3-feat-txt">Export audit logs as PDF, CSV,
+              JSON</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="p3-r">
+      <div class="p3-r-content">
+        <div class="sec-rule sec-rule-dark" style="margin-bottom:44px">
+          <span class="sec-rule-txt">Certificate of Destruction</span>
+          <span class="sec-rule-line"></span>
+          <span class="sec-rule-num">04</span>
+        </div>
+        <div class="p3-pullquote">Non-tamperable proof of obliteration.</div>
+        <h2 class="p3-r-head">Three<br>Layers of<br><em>Trust.</em></h2>
+        <p class="p3-r-body">every wipe issues a certificate verified by SHA-256 hash, UUID server validation, and a
+          permanent Bitcoin blockchain anchor via OpenTimestamps. even if our servers go offline, the proof exists
+          forever.</p>
+        <div class="cert">
+          <div class="cert-logo">OBLVN</div>
+          <div class="cf"><label>Certificate ID</label>
+            <value>WJ-2026-A3F9-22C1</value>
+          </div>
+          <div class="cf"><label>Device</label>
+            <value>Samsung 870 EVO 1TB, S4EVNX0R214832K</value>
+          </div>
+          <div class="cf"><label>Method</label>
+            <value>Full Sanitization, NIST 800-88 + AES-256</value>
+          </div>
+          <div class="cf"><label>Timestamp (UTC)</label>
+            <value>2026-03-22T09:14:32Z</value>
+          </div>
+          <div class="cert-hash">SHA-256 · a3f9c2d81e0b4f726a19d3c5e847f2b90c1d6e3a8f4b2c7d91e0a5f8b3c6d2e1a</div>
+          <div class="cert-foot">
+            <span class="cert-ok">Bitcoin Anchored via OpenTimestamps</span>
+            <span class="cert-tx">verify.oblvn.com/WJ-2026-A3F9-22C1</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="p4" id="compliance">
+    <svg style="position:absolute;right:-180px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:0.06"
+      width="540" height="540" viewBox="0 0 540 540">
+      <circle cx="270" cy="270" r="36" fill="none" stroke="#1a2218" stroke-width="1" />
+      <circle cx="270" cy="270" r="80" fill="none" stroke="#1a2218" stroke-width="1" />
+      <circle cx="270" cy="270" r="128" fill="none" stroke="#1a2218" stroke-width="1" />
+      <circle cx="270" cy="270" r="180" fill="none" stroke="#1a2218" stroke-width="1" />
+      <circle cx="270" cy="270" r="234" fill="none" stroke="#1a2218" stroke-width=".8" />
+      <circle cx="270" cy="270" r="264" fill="none" stroke="#1a2218" stroke-width=".5" />
+    </svg>
+    <div class="p4-ghost-word">Compliant</div>
+    <div class="sec-rule sec-rule-dark" style="margin-bottom:88px">
+      <span class="sec-rule-txt">Compliance and Principles</span>
+      <span class="sec-rule-line"></span>
+      <span class="sec-rule-num">05</span>
+    </div>
+    <div class="p4-layout">
+      <div>
+        <h2 class="p4-head">Built for<br><em>Regulators.</em><br>Loved by IT.</h2>
+        <div class="badges">
+          <div class="badge on">GDPR</div>
+          <div class="badge">HIPAA</div>
+          <div class="badge">NIST 800-88</div>
+          <div class="badge">DoD 5220.22-M</div>
+          <div class="badge">ISO 27001</div>
+          <div class="badge">SOC 2</div>
+          <div class="badge">FIPS 140-2</div>
+        </div>
+        <div class="rules">
+          <div class="rule"><span class="rule-n">01</span><span class="rule-t">regular deletion removes only file system
+              pointers. The underlying magnetic patterns remain fully recoverable by forensic tools. OBLVN destroys the
+              data itself.</span></div>
+          <div class="rule"><span class="rule-n">02</span><span class="rule-t">GDPR Article 17 requires proof of
+              erasure. Our certificate is that proof, court-admissible, Bitcoin-anchored, independently
+              verifiable.</span></div>
+          <div class="rule"><span class="rule-n">03</span><span class="rule-t">SSDs use wear-levelling that defeats
+              overwrite-based methods. OBLVN auto-detects device type and applies the correct standard
+              automatically.</span></div>
+          <div class="rule"><span class="rule-n">04</span><span class="rule-t">the audit log is cryptographically
+              chained and append-only. No administrator can alter or delete a historical record. Compliance is
+              architecture.</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="p4-quote">"Zero recovery.<br>Total proof."</div>
+        <div class="p4-stats">
+          <div class="p4-stat"><span class="p4-stat-n">0%</span><span class="p4-stat-l">Recovery Rate</span></div>
+          <div class="p4-stat"><span class="p4-stat-n">256</span><span class="p4-stat-l">Bit Encryption</span></div>
+          <div class="p4-stat"><span class="p4-stat-n">35</span><span class="p4-stat-l">Max Overwrite Passes</span>
+          </div>
+          <div class="p4-stat"><span class="p4-stat-n">inf</span><span class="p4-stat-l">Bitcoin Permanence</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="p5">
+    <div class="p5-stripe"><span></span><span></span><span></span><span></span><span></span></div>
+    <svg class="p5-conc" width="660" height="660" viewBox="0 0 660 660">
+      <circle cx="330" cy="330" r="32" fill="none" stroke="#f0ebe0" stroke-width="1" />
+      <circle cx="330" cy="330" r="76" fill="none" stroke="#f0ebe0" stroke-width="1" />
+      <circle cx="330" cy="330" r="124" fill="none" stroke="#f0ebe0" stroke-width="1" />
+      <circle cx="330" cy="330" r="176" fill="none" stroke="#f0ebe0" stroke-width="1" />
+      <circle cx="330" cy="330" r="232" fill="none" stroke="#f0ebe0" stroke-width=".8" />
+      <circle cx="330" cy="330" r="290" fill="none" stroke="#f0ebe0" stroke-width=".6" />
+      <circle cx="330" cy="330" r="320" fill="none" stroke="#f0ebe0" stroke-width=".4" />
+    </svg>
+    <div class="p5-statement">
+      Every drive disposed.<br>
+      Every byte <em>obliterated.</em><br>
+      <span class="script-line">proven forever.</span>
+    </div>
+    <div class="p5-foot">
+      <div>
+        <div class="foot-brand">OBLVN</div>
+      </div>
+      <div>
+        <div class="foot-head">Product</div>
+        <ul class="foot-list">
+          <li><a href="#methods">How It Works</a></li>
+          <li><a href="#compliance">Compliance</a></li>
+          <li><a href="/app/login">Sign In</a></li>
+        </ul>
+      </div>
+      <div>
+        <div class="foot-head">Legal</div>
+        <ul class="foot-list">
+          <li><a href="#">Privacy Policy</a></li>
+          <li><a href="#">Terms of Service</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <div class="foot-copy">2026 OBLVN. All data destroyed. No traces remain.</div>
+      <div class="foot-comp"><span>GDPR</span><span>HIPAA</span><span>NIST</span><span>ISO 27001</span></div>
+    </div>
+  </section>
+
+  <script>
+    const hd = document.getElementById('heroDots')
+    for (let i = 0; i < 308; i++) { const s = document.createElement('span'); const row = Math.floor(i / 22), col = i % 22; const b = Math.max(0.02, 0.16 - (row * 0.008) - (col * 0.003) + (Math.random() * 0.04)); s.style.opacity = b.toFixed(3); const sz = Math.max(1.5, 3.5 - (row * 0.15) - (col * 0.05)); s.style.width = sz + 'px'; s.style.height = sz + 'px'; hd.appendChild(s) }
+    const rg = document.getElementById('rectGrid'); for (let i = 0; i < 32; i++)rg.appendChild(document.createElement('span'))
+    const ht = document.getElementById('heroTris'); for (let i = 0; i < 18; i++) { const s = document.createElement('span'); s.style.opacity = (0.04 + Math.random() * 0.04).toFixed(3); ht.appendChild(s) }
+    const nav = document.getElementById('mainNav')
+    const lightSections = [document.querySelector('.p2'), document.querySelector('.p4'), document.querySelector('.ticker'), document.querySelector('.p3')]
+    function updateNav() { const nb = nav.getBoundingClientRect().bottom; let isLight = false; for (const s of lightSections) { if (!s) continue; const r = s.getBoundingClientRect(); if (r.top < nb && r.bottom > 0) { isLight = true; break } } nav.classList.toggle('nav--light', isLight) }
+    let ticking = false; window.addEventListener('scroll', () => { if (!ticking) { requestAnimationFrame(() => { updateNav(); ticking = false }); ticking = true } }, { passive: true })
+    updateNav()
+  </script>
+</body>
+
+</html>

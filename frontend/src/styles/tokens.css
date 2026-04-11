@@ -1,0 +1,68 @@
+:root {
+  --ink: #1a2218;
+  --ink-mid: #1f2a1d;
+  --moss: #2e3a2b;
+  --sage: #4a5442;
+  --cream: #f5e6c8;
+  --cream-2: #ede0c4;
+  --cream-dark: #d4c9a8;
+  --parchment: #c4b48a;
+  --serif: 'Playfair Display', serif;
+  --script: 'Cormorant Garamond', serif;
+  --sans: 'DM Sans', sans-serif;
+  --mono: 'IBM Plex Mono', monospace;
+  --ink-line: rgba(240, 235, 224, 0.06);
+  --cream-line: rgba(26, 34, 24, 0.08);
+}
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+select {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--ink);
+  color: var(--cream);
+  font-family: var(--sans);
+  overflow-x: hidden;
+  cursor: crosshair;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  cursor: crosshair;
+  border: none;
+  background: none;
+}
+
+input,
+select,
+textarea {
+  font-family: var(--mono);
+  background: transparent;
+  color: var(--cream);
+  border: none;
+  outline: none;
+}
