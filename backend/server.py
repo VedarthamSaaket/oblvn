@@ -1,3 +1,31 @@
+"""
+backend/server.py — OBLVN API Server (Security-Hardened)
+
+Security changes applied (nothing stripped, no core functionality altered):
+  ✔ SecurityHeadersMiddleware      — CSP, HSTS, X-Frame-Options, etc.
+  ✔ RequestSizeLimitMiddleware     — 10 MiB body cap, DoS protection
+  ✔ TrafficMonitorMiddleware       — per-IP rate + error-rate blocking
+  ✔ HostValidationMiddleware       — phishing / DNS-rebind protection
+  ✔ CORS locked to env-configured origins
+  ✔ Rate limiting on register, devices, job creation, org creation
+  ✔ Email & password-strength validation on register
+  ✔ Email format validation on login / password-reset
+  ✔ UUID validation on all path params (job_id, anomaly_id, org_id, cert_id, user_id)
+  ✔ Enum allowlist validation on method, standard, role, sensitivity, format
+  ✔ IDOR fixed on get_certificate / download_certificate (ownership check)
+  ✔ IDOR fixed on list_anomalies (scoped to user when no org_id)
+  ✔ IDOR fixed on ack_anomaly (ownership assertion before update)
+  ✔ IDOR fixed on list_audit (scoped to user when no org_id)
+  ✔ IDOR fixed on audit_export (org membership check)
+  ✔ IDOR fixed on audit_verify (org membership check)
+  ✔ IDOR fixed on risk_score (org membership check when org_id given)
+  ✔ IDOR fixed on list_members (org membership check)
+  ✔ IDOR fixed on list_jobs / list_devices (org membership check)
+  ✔ IDOR fixed on create_job (org membership check)
+  ✔ IDOR fixed on approve_job (job must belong to the supplied org)
+  ✔ Internal error messages sanitised in production
+"""
+
 import io
 import json
 import threading
@@ -31,7 +59,32 @@ from backend.detector import DeviceDetectionError, detect_devices, get_device_by
 from backend.reporter import generate_certificate
 from backend.supabase_client import get_service_client
 
-# -- Pydantic schemas
+# Security module — all helpers live here
+from backend.security import (
+    SecurityHeadersMiddleware,
+    RequestSizeLimitMiddleware,
+    TrafficMonitorMiddleware,
+    HostValidationMiddleware,
+    validate_uuid,
+    validate_email,
+    validate_password_strength,
+    validate_enum,
+    assert_job_access,
+    assert_org_membership,
+    assert_anomaly_access,
+    assert_certificate_access,
+    safe_error_detail,
+    ALLOWED_WIPE_METHODS,
+    ALLOWED_STANDARDS,
+    ALLOWED_ROLES,
+    ALLOWED_SENSITIVITIES,
+    ALLOWED_AUDIT_FORMATS,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pydantic schemas
+# ─────────────────────────────────────────────────────────────────────────────
 
 class AuthBody(BaseModel):
     email: str
@@ -63,7 +116,10 @@ class RoleBody(BaseModel):
 class ApproveBody(BaseModel):
     org_id: Optional[str] = None
 
-# -- App setup
+
+# ─────────────────────────────────────────────────────────────────────────────
+# App setup
+# ─────────────────────────────────────────────────────────────────────────────
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -71,13 +127,38 @@ app = FastAPI(title="OBLVN")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# ── Security middlewares (order matters — outermost runs first) ───────────────
+
+# Host validation — protects against DNS rebinding / phishing Host headers
+app.add_middleware(HostValidationMiddleware)
+
+# Security response headers
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Request body size cap (10 MiB)
+app.add_middleware(RequestSizeLimitMiddleware, max_bytes=10 * 1024 * 1024)
+
+# Per-IP traffic / abuse monitor
+app.add_middleware(TrafficMonitorMiddleware)
+
+# ── CORS — read allowed origins from env so production is locked down ─────────
+_raw_origins = os.environ.get(
+    "OBLVN_ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000",
+)
+_ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    expose_headers=["Content-Disposition"],
+    max_age=600,
 )
+
+# ── Scheduled statistical anomaly batch ───────────────────────────────────────
 
 def _scheduled_batch():
     try:
@@ -102,6 +183,10 @@ async def _ws_broadcast(job_id: str, data: dict):
             pass
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Auth helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _get_current_user(request: Request) -> dict:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -121,7 +206,9 @@ FRONTEND_DIST   = Path(__file__).parent.parent / "frontend" / "dist"
 FRONTEND_PUBLIC = Path(__file__).parent.parent / "frontend" / "public"
 
 
-# -- Supabase retry helper
+# ─────────────────────────────────────────────────────────────────────────────
+# Supabase retry helpers (unchanged)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _supabase_update_with_retry(
     svc,
@@ -173,7 +260,9 @@ def _finalize_job_with_retry(
     raise last_exc
 
 
-# -- File/folder picker utilities
+# ─────────────────────────────────────────────────────────────────────────────
+# File / folder picker utilities (unchanged)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _collect_folder_files(folder: str) -> list[str]:
     """Recursively collect all file paths inside a folder."""
@@ -184,7 +273,9 @@ def _collect_folder_files(folder: str) -> list[str]:
     return paths
 
 
-# -- Routes
+# ─────────────────────────────────────────────────────────────────────────────
+# Routes — public
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def landing():
@@ -196,64 +287,90 @@ async def landing():
 
 @app.get("/verify/{cert_id}")
 async def verify_certificate(cert_id: str):
+    validate_uuid(cert_id, "cert_id")
     svc = get_service_client()
-    r = (svc.table("wipe_jobs")
-         .select("id,sha256_hash,completed_at,device_model,device_serial,method,standard")
-         .eq("id", cert_id)
-         .maybe_single()
-         .execute())
+    r = (
+        svc.table("wipe_jobs")
+        .select("id,sha256_hash,completed_at,device_model,device_serial,method,standard")
+        .eq("id", cert_id)
+        .maybe_single()
+        .execute()
+    )
     if not r.data:
         raise HTTPException(status_code=404, detail="Certificate not found")
     job = r.data
     return {
-        "verified": True,
+        "verified":       True,
         "certificate_id": cert_id,
-        "sha256_hash": job.get("sha256_hash"),
-        "completed_at": job.get("completed_at"),
-        "device_model": job.get("device_model"),
-        "device_serial": job.get("device_serial"),
-        "method": job.get("method"),
-        "standard": job.get("standard"),
+        "sha256_hash":    job.get("sha256_hash"),
+        "completed_at":   job.get("completed_at"),
+        "device_model":   job.get("device_model"),
+        "device_serial":  job.get("device_serial"),
+        "method":         job.get("method"),
+        "standard":       job.get("standard"),
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Auth routes
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.post("/api/auth/register", status_code=201)
-async def register(body: AuthBody):
+@limiter.limit("10 per minute")          # prevent automated account creation
+async def register(request: Request, body: AuthBody):
+    # Validate email format and password strength before touching Supabase
+    validated_email = validate_email(body.email)
+    validate_password_strength(body.password)
+
     client = get_service_client()
     try:
-        result = client.auth.sign_up({"email": body.email, "password": body.password})
+        result = client.auth.sign_up({"email": validated_email, "password": body.password})
         if result.user is None:
             return {"user_id": "pending_confirmation", "confirm_email": True}
         user_id = result.user.id
-        log_event("user_registered", {"email": body.email}, user_id=user_id)
+        log_event("user_registered", {"email": validated_email}, user_id=user_id)
         return {"user_id": user_id, "confirm_email": False}
+    except HTTPException:
+        raise
     except Exception as exc:
         print(f"[REGISTER ERROR] {type(exc).__name__}: {exc}")
-        raise HTTPException(status_code=400, detail=str(exc))
+        # Do not leak provider error details; return a generic message
+        raise HTTPException(
+            status_code=400,
+            detail=safe_error_detail(exc, "Registration failed. Please try again."),
+        )
 
 
 @app.post("/api/auth/login")
 @limiter.limit(config.AUTH_RATE_LIMIT)
 async def login(request: Request, body: AuthBody):
+    # Validate email format to reject obviously malformed inputs early
+    validated_email = validate_email(body.email)
+
     client = get_service_client()
     ip = request.client.host if request.client else "unknown"
     try:
-        result = client.auth.sign_in_with_password({"email": body.email, "password": body.password})
+        result = client.auth.sign_in_with_password(
+            {"email": validated_email, "password": body.password}
+        )
         user_id = result.user.id
-        log_event("login_success", {"email": body.email, "ip_address": ip}, user_id=user_id)
+        log_event("login_success", {"email": validated_email, "ip_address": ip}, user_id=user_id)
         check_new_ip(user_id, None, ip)
         check_unusual_login_hour(user_id, None, datetime.now(timezone.utc))
         return {
-            "access_token": result.session.access_token,
+            "access_token":  result.session.access_token,
             "refresh_token": result.session.refresh_token,
-            "user": {"id": user_id, "email": body.email},
+            "user":          {"id": user_id, "email": validated_email},
         }
+    except HTTPException:
+        raise
     except Exception:
-        log_event("login_failed", {"email": body.email, "ip_address": ip}, user_id=None)
+        log_event("login_failed", {"email": validated_email, "ip_address": ip}, user_id=None)
         try:
-            check_failed_logins(body.email, None)
+            check_failed_logins(validated_email, None)
         except Exception:
             pass
+        # Always return the same generic message to prevent user enumeration
         raise HTTPException(status_code=401, detail="Invalid login credentials")
 
 
@@ -269,40 +386,57 @@ async def logout(request: Request):
 
 
 @app.post("/api/auth/refresh")
-async def refresh(body: RefreshBody):
+@limiter.limit("30 per minute")
+async def refresh(request: Request, body: RefreshBody):
     try:
         result = get_service_client().auth.refresh_session(body.refresh_token)
         return {
-            "access_token": result.session.access_token,
+            "access_token":  result.session.access_token,
             "refresh_token": result.session.refresh_token,
         }
     except Exception as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
+        raise HTTPException(status_code=401, detail="Token refresh failed")
 
 
 @app.post("/api/auth/2fa/setup")
 async def setup_2fa(request: Request):
     current_user(request)
     return {
-        "message": "TOTP enrollment is handled via Supabase MFA API",
+        "message":  "TOTP enrollment is handled via Supabase MFA API",
         "endpoint": f"{config.SUPABASE_URL}/auth/v1/factors",
-        "docs": "https://supabase.com/docs/guides/auth/auth-mfa",
+        "docs":     "https://supabase.com/docs/guides/auth/auth-mfa",
     }
 
 
 @app.post("/api/auth/password/reset")
 @limiter.limit(config.AUTH_RATE_LIMIT)
 async def password_reset(request: Request, body: ResetBody):
+    validated_email = validate_email(body.email)
     try:
-        get_service_client().auth.reset_password_email(body.email)
+        get_service_client().auth.reset_password_email(validated_email)
+        # Always return success — never reveal whether the email exists
         return {"ok": True}
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        return {"ok": True}
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Device routes
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/devices")
+@limiter.limit("60 per minute")
 async def list_devices(request: Request, org_id: Optional[str] = Query(None)):
     user = current_user(request)
+
+    # IDOR: if an org_id is provided, verify the caller belongs to it
+    if org_id and org_id not in ("undefined", "null", ""):
+        validate_uuid(org_id, "org_id")
+        svc = get_service_client()
+        assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
+    else:
+        org_id = None
+
     try:
         devices = detect_devices()
         for d in devices:
@@ -315,6 +449,7 @@ async def list_devices(request: Request, org_id: Optional[str] = Query(None)):
 
 
 @app.get("/api/devices/refresh")
+@limiter.limit("30 per minute")
 async def refresh_devices_get(request: Request):
     current_user(request)
     try:
@@ -324,6 +459,7 @@ async def refresh_devices_get(request: Request):
 
 
 @app.post("/api/devices/refresh")
+@limiter.limit("30 per minute")
 async def refresh_devices(request: Request):
     current_user(request)
     try:
@@ -333,6 +469,7 @@ async def refresh_devices(request: Request):
 
 
 @app.get("/api/devices/{serial}")
+@limiter.limit("60 per minute")
 async def get_device(serial: str, request: Request):
     current_user(request)
     try:
@@ -344,7 +481,9 @@ async def get_device(serial: str, request: Request):
         raise HTTPException(status_code=503, detail=str(exc))
 
 
-# -- File/folder picker endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+# File / folder picker endpoints (unchanged, security gated by current_user)
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/utils/select-files")
 async def select_local_files(request: Request):
@@ -373,7 +512,7 @@ async def select_local_files(request: Request):
             None, lambda: tk_worker.run_job(_pick)
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=safe_error_detail(exc))
 
     if not result.get("paths"):
         raise HTTPException(status_code=400, detail="No files selected")
@@ -446,7 +585,7 @@ async def select_local_folder(request: Request):
             None, lambda: tk_worker.run_job(_pick)
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=safe_error_detail(exc))
 
     folders = result.get("folders") or []
     if not folders:
@@ -723,7 +862,7 @@ async def select_items(request: Request):
             None, lambda: tk_worker.run_job(_picker)
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=safe_error_detail(exc))
 
     if result.get("cancelled"):
         raise HTTPException(status_code=400, detail="Selection cancelled")
@@ -733,27 +872,52 @@ async def select_items(request: Request):
     return {"paths": result["paths"], "sources": result["sources"]}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Job routes
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.get("/api/jobs")
+@limiter.limit("60 per minute")
 async def list_jobs(request: Request, org_id: Optional[str] = Query(None)):
     user = current_user(request)
+
     if org_id in ("undefined", "null", ""):
         org_id = None
+
     svc = get_service_client()
-    q = svc.table("wipe_jobs").select("*").order("created_at", desc=True)
+
     if org_id:
-        q = q.eq("org_id", org_id)
+        # IDOR: verify caller is a member of the org before listing its jobs
+        validate_uuid(org_id, "org_id")
+        assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
+        q = svc.table("wipe_jobs").select("*").order("created_at", desc=True).eq("org_id", org_id)
     else:
-        q = q.eq("user_id", user["user_id"])
+        # No org_id → return only the authenticated user's own jobs
+        q = svc.table("wipe_jobs").select("*").order("created_at", desc=True).eq("user_id", user["user_id"])
+
     r = q.execute()
     return {"jobs": r.data or []}
 
 
 @app.post("/api/jobs", status_code=201)
+@limiter.limit("30 per minute")
 async def create_job(request: Request):
     user = current_user(request)
     data = await request.json()
-    svc = get_service_client()
+    svc  = get_service_client()
     org_id = data.get("org_id")
+
+    # IDOR: validate org membership before creating a job under that org
+    if org_id and org_id not in ("undefined", "null", ""):
+        validate_uuid(org_id, "org_id")
+        assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
+    else:
+        org_id = None
+
+    # Validate wipe method and standard against allowlists
+    method   = validate_enum(data.get("method", ""), ALLOWED_WIPE_METHODS, "method")
+    standard = validate_enum(data.get("standard", ""), ALLOWED_STANDARDS, "standard")
+
     target_serial = data.get("device_serial", "")
 
     if target_serial.startswith("file:"):
@@ -825,11 +989,13 @@ async def create_job(request: Request):
 
     needs_approval = False
     if org_id:
-        org_r = (svc.table("organisations")
-                 .select("approval_gate_enabled")
-                 .eq("id", org_id)
-                 .maybe_single()
-                 .execute())
+        org_r = (
+            svc.table("organisations")
+            .select("approval_gate_enabled")
+            .eq("id", org_id)
+            .maybe_single()
+            .execute()
+        )
         if org_r.data:
             role = get_user_role(user["user_id"], org_id)
             needs_approval = org_r.data.get("approval_gate_enabled") and role == "operator"
@@ -843,8 +1009,8 @@ async def create_job(request: Request):
         "user_id":               user["user_id"],
         "org_id":                org_id,
         "status":                status,
-        "method":                data["method"],
-        "standard":              data["standard"],
+        "method":                method,
+        "standard":              standard,
         "device_serial":         device["serial"],
         "device_model":          device["model"],
         "device_capacity_bytes": device["capacity_bytes"],
@@ -857,8 +1023,12 @@ async def create_job(request: Request):
 
     r = svc.table("wipe_jobs").insert(job).execute()
     created = r.data[0]
-    log_event("wipe_job_created", {"job_id": created["id"], "device": device["serial"]},
-              user_id=user["user_id"], org_id=org_id)
+    log_event(
+        "wipe_job_created",
+        {"job_id": created["id"], "device": device["serial"]},
+        user_id=user["user_id"],
+        org_id=org_id,
+    )
 
     if status == "queued":
         threading.Thread(target=_execute_job, args=(created["id"],), daemon=True).start()
@@ -868,34 +1038,41 @@ async def create_job(request: Request):
 
 @app.get("/api/jobs/{job_id}")
 async def get_job(job_id: str, request: Request):
+    validate_uuid(job_id, "job_id")
     user = current_user(request)
-    svc = get_service_client()
+    svc  = get_service_client()
+
     r = svc.table("wipe_jobs").select("*").eq("id", job_id).maybe_single().execute()
     if not r.data:
         raise HTTPException(status_code=404, detail="Job not found")
     job = r.data
-    if job["user_id"] != user["user_id"]:
-        if job.get("org_id"):
-            member = (svc.table("org_memberships")
-                      .select("role")
-                      .eq("org_id", job["org_id"])
-                      .eq("user_id", user["user_id"])
-                      .maybe_single()
-                      .execute())
-            if not member.data:
-                raise HTTPException(status_code=403, detail="Forbidden")
-        else:
-            raise HTTPException(status_code=403, detail="Forbidden")
+
+    # IDOR: assert the requester owns this job or is an org member
+    assert_job_access(job, user["user_id"], svc)
     return job
 
 
 @app.post("/api/jobs/{job_id}/approve")
 async def approve_job(job_id: str, request: Request, body: ApproveBody):
+    validate_uuid(job_id, "job_id")
     user = current_user(request)
+
+    if body.org_id:
+        validate_uuid(body.org_id, "org_id")
+
     role = get_user_role(user["user_id"], body.org_id)
     if role not in ("org_admin", "team_lead"):
         raise HTTPException(status_code=403, detail="Requires team_lead or org_admin")
+
     svc = get_service_client()
+
+    # IDOR: verify the job actually belongs to the supplied org
+    job_r = svc.table("wipe_jobs").select("org_id,status").eq("id", job_id).maybe_single().execute()
+    if not job_r.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if body.org_id and job_r.data.get("org_id") != body.org_id:
+        raise HTTPException(status_code=403, detail="Forbidden: job does not belong to this organisation")
+
     svc.table("wipe_jobs").update({"status": "queued", "approved_by": user["user_id"]}).eq("id", job_id).execute()
     log_event("wipe_job_approved", {"job_id": job_id}, user_id=user["user_id"], org_id=body.org_id)
     threading.Thread(target=_execute_job, args=(job_id,), daemon=True).start()
@@ -904,8 +1081,10 @@ async def approve_job(job_id: str, request: Request, body: ApproveBody):
 
 @app.post("/api/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str, request: Request):
+    validate_uuid(job_id, "job_id")
     user = current_user(request)
-    svc = get_service_client()
+    svc  = get_service_client()
+
     r = svc.table("wipe_jobs").select("status,user_id,org_id").eq("id", job_id).maybe_single().execute()
     if not r.data:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -932,19 +1111,30 @@ async def cancel_job(job_id: str, request: Request):
     return {"ok": True}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Certificate routes
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.get("/api/certificates/{job_id}")
 async def get_certificate(job_id: str, request: Request):
-    current_user(request)
-    svc = get_service_client()
-    r = svc.table("wipe_jobs").select("*").eq("id", job_id).eq("status", "completed").maybe_single().execute()
-    if not r.data:
-        raise HTTPException(status_code=404, detail="Certificate not found")
-    return r.data
+    validate_uuid(job_id, "job_id")
+    user = current_user(request)
+    svc  = get_service_client()
+
+    # IDOR: assert_certificate_access fetches + checks ownership
+    job = assert_certificate_access(job_id, user["user_id"], svc)
+    return job
 
 
 @app.get("/api/certificates/{job_id}/download")
 async def download_certificate(job_id: str, request: Request):
-    current_user(request)
+    validate_uuid(job_id, "job_id")
+    user = current_user(request)
+    svc  = get_service_client()
+
+    # IDOR: verify ownership before serving the PDF from disk
+    assert_certificate_access(job_id, user["user_id"], svc)
+
     pdf_path = config.DATA_DIR / "certs" / f"{job_id}.pdf"
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
@@ -955,31 +1145,60 @@ async def download_certificate(job_id: str, request: Request):
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Audit routes
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.get("/api/audit")
 async def list_audit(
     request: Request,
     org_id: Optional[str] = Query(None),
-    start: Optional[str] = Query(None),
-    end: Optional[str] = Query(None),
+    start:  Optional[str] = Query(None),
+    end:    Optional[str] = Query(None),
 ):
     user = current_user(request)
-    if org_id:
+
+    if org_id and org_id not in ("undefined", "null", ""):
+        validate_uuid(org_id, "org_id")
+        # IDOR: only org_admin may view the organisation's full audit log
         role = get_user_role(user["user_id"], org_id)
         if role != "org_admin":
             raise HTTPException(status_code=403, detail="Requires org_admin")
-    entries = export_json(org_id, start, end)
+        entries = export_json(org_id, start, end)
+    else:
+        # Account isolation: no org_id → return only this user's own entries
+        svc = get_service_client()
+        q   = svc.table("audit_log").select("*").order("id", desc=False).eq("user_id", user["user_id"])
+        if start:
+            q = q.gte("created_at", start)
+        if end:
+            q = q.lte("created_at", end)
+        r = q.execute()
+        entries = r.data or []
+
     return {"entries": entries, "count": len(entries)}
 
 
 @app.get("/api/audit/export")
+@limiter.limit("10 per minute")          # prevent bulk data exfiltration
 async def audit_export(
     request: Request,
-    org_id: Optional[str] = Query(None),
-    format: str = Query("json"),
-    start: Optional[str] = Query(None),
-    end: Optional[str] = Query(None),
+    org_id:  Optional[str] = Query(None),
+    format:  str            = Query("json"),
+    start:   Optional[str] = Query(None),
+    end:     Optional[str] = Query(None),
 ):
-    current_user(request)
+    user = current_user(request)
+    validate_enum(format, ALLOWED_AUDIT_FORMATS, "format")
+
+    if org_id and org_id not in ("undefined", "null", ""):
+        validate_uuid(org_id, "org_id")
+        # IDOR: only org_admin may export the org's audit log
+        svc  = get_service_client()
+        assert_org_membership(org_id, user["user_id"], svc, min_role="org_admin")
+    else:
+        org_id = None
+
     if format == "csv":
         content = export_csv(org_id, start, end)
         return StreamingResponse(
@@ -999,38 +1218,73 @@ async def audit_export(
 
 @app.get("/api/audit/verify")
 async def audit_verify(request: Request, org_id: Optional[str] = Query(None)):
-    current_user(request)
+    user = current_user(request)
+
+    if org_id and org_id not in ("undefined", "null", ""):
+        validate_uuid(org_id, "org_id")
+        # IDOR: only org members may verify the org's chain
+        svc = get_service_client()
+        assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
+    else:
+        org_id = None
+
     return verify_chain(org_id)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Anomaly routes
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.get("/api/anomalies/risk-score")
 async def risk_score(request: Request, org_id: Optional[str] = Query(None)):
-    current_user(request)
+    user = current_user(request)
+
     if org_id in ("undefined", "null", ""):
         org_id = None
+
+    if org_id:
+        validate_uuid(org_id, "org_id")
+        # IDOR: verify membership before returning org-wide risk score
+        svc = get_service_client()
+        assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
+
     return compute_risk_score(org_id)
 
 
 @app.get("/api/anomalies")
 async def list_anomalies(
     request: Request,
-    org_id: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
+    org_id:  Optional[str] = Query(None),
+    status:  Optional[str] = Query(None),
 ):
-    current_user(request)
-    svc = get_service_client()
-    q = svc.table("anomalies").select("*").order("detected_at", desc=True)
-    if org_id:
-        q = q.eq("org_id", org_id)
+    user = current_user(request)
+    svc  = get_service_client()
+
+    if org_id and org_id not in ("undefined", "null", ""):
+        validate_uuid(org_id, "org_id")
+        # IDOR: verify org membership before listing org anomalies
+        assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
+        q = svc.table("anomalies").select("*").order("detected_at", desc=True).eq("org_id", org_id)
+    else:
+        # Account isolation: no org → return only anomalies linked to this user
+        q = svc.table("anomalies").select("*").order("detected_at", desc=True).eq("user_id", user["user_id"])
+
     if status:
         q = q.eq("status", status)
+
     r = q.execute()
     return {"anomalies": r.data or []}
 
 
 @app.post("/api/anomalies/{anomaly_id}/acknowledge")
 async def ack_anomaly(anomaly_id: str, request: Request, body: AnomalyAckBody):
+    validate_uuid(anomaly_id, "anomaly_id")
     user = current_user(request)
+    svc  = get_service_client()
+
+    # IDOR: verify user can access this anomaly before acknowledging it
+    assert_anomaly_access(anomaly_id, user["user_id"], svc)
+
     result = acknowledge_anomaly(
         anomaly_id, user["user_id"],
         note=body.note,
@@ -1039,9 +1293,18 @@ async def ack_anomaly(anomaly_id: str, request: Request, body: AnomalyAckBody):
     return result
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Organisation routes
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.post("/api/orgs", status_code=201)
+@limiter.limit("10 per minute")
 async def create_org(request: Request, body: OrgBody):
     user = current_user(request)
+
+    # Validate sensitivity value against allowlist
+    validate_enum(body.anomaly_sensitivity, ALLOWED_SENSITIVITIES, "anomaly_sensitivity")
+
     svc = get_service_client()
     org = {
         "name":                  body.name,
@@ -1064,55 +1327,82 @@ async def create_org(request: Request, body: OrgBody):
 
 @app.patch("/api/orgs/{org_id}")
 async def update_org(org_id: str, request: Request):
+    validate_uuid(org_id, "org_id")
     user = current_user(request)
     role = get_user_role(user["user_id"], org_id)
     if role != "org_admin":
         raise HTTPException(status_code=403, detail="Requires org_admin")
-    data = await request.json()
+
+    data    = await request.json()
     allowed = {"approval_gate_enabled", "audit_retention_days",
                "anomaly_sensitivity", "data_minimisation_config", "name"}
-    update = {k: v for k, v in data.items() if k in allowed}
+    update  = {k: v for k, v in data.items() if k in allowed}
+
+    # Validate sensitivity if it's being updated
+    if "anomaly_sensitivity" in update:
+        validate_enum(update["anomaly_sensitivity"], ALLOWED_SENSITIVITIES, "anomaly_sensitivity")
+
     svc = get_service_client()
-    r = svc.table("organisations").update(update).eq("id", org_id).execute()
+    r   = svc.table("organisations").update(update).eq("id", org_id).execute()
     return r.data[0] if r.data else {}
 
 
 @app.get("/api/orgs/{org_id}/members")
 async def list_members(org_id: str, request: Request):
-    current_user(request)
-    svc = get_service_client()
+    validate_uuid(org_id, "org_id")
+    user = current_user(request)
+    svc  = get_service_client()
+
+    # IDOR: only org members may list other members
+    assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
+
     r = svc.table("org_memberships").select("*").eq("org_id", org_id).execute()
     return {"members": r.data or []}
 
 
 @app.post("/api/orgs/{org_id}/invite")
 async def invite_member(org_id: str, request: Request, body: InviteBody):
+    validate_uuid(org_id, "org_id")
     user = current_user(request)
     role = get_user_role(user["user_id"], org_id)
     if role != "org_admin":
         raise HTTPException(status_code=403, detail="Requires org_admin")
+
+    # Validate inputs
+    validated_email = validate_email(body.email)
+    validate_enum(body.role, ALLOWED_ROLES, "role")
+
     svc = get_service_client()
     try:
-        user_result = svc.auth.admin.invite_user_by_email(body.email)
+        user_result = svc.auth.admin.invite_user_by_email(validated_email)
         svc.table("org_memberships").insert({
             "user_id":    user_result.user.id,
             "org_id":     org_id,
             "role":       body.role,
             "invited_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
-        log_event("member_invited", {"email": body.email, "role": body.role},
-                  user_id=user["user_id"], org_id=org_id)
+        log_event(
+            "member_invited",
+            {"email": validated_email, "role": body.role},
+            user_id=user["user_id"],
+            org_id=org_id,
+        )
         return {"ok": True}
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=safe_error_detail(exc, "Invite failed"))
 
 
 @app.delete("/api/orgs/{org_id}/members/{user_id}")
 async def revoke_member(org_id: str, user_id: str, request: Request):
+    validate_uuid(org_id, "org_id")
+    validate_uuid(user_id, "user_id")
     user = current_user(request)
     role = get_user_role(user["user_id"], org_id)
     if role != "org_admin":
         raise HTTPException(status_code=403, detail="Requires org_admin")
+
     svc = get_service_client()
     svc.table("org_memberships").delete().eq("org_id", org_id).eq("user_id", user_id).execute()
     log_event("member_revoked", {"user_id": user_id}, user_id=user["user_id"], org_id=org_id)
@@ -1121,37 +1411,59 @@ async def revoke_member(org_id: str, user_id: str, request: Request):
 
 @app.patch("/api/orgs/{org_id}/members/{user_id}/role")
 async def change_role(org_id: str, user_id: str, request: Request, body: RoleBody):
+    validate_uuid(org_id, "org_id")
+    validate_uuid(user_id, "user_id")
     user = current_user(request)
+
     admin_role = get_user_role(user["user_id"], org_id)
     if admin_role != "org_admin":
         raise HTTPException(status_code=403, detail="Requires org_admin")
+
+    validate_enum(body.role, ALLOWED_ROLES, "role")
+
     svc = get_service_client()
-    old_r = (svc.table("org_memberships")
-             .select("role")
-             .eq("org_id", org_id)
-             .eq("user_id", user_id)
-             .maybe_single()
-             .execute())
+    old_r = (
+        svc.table("org_memberships")
+        .select("role")
+        .eq("org_id", org_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
     old_role = old_r.data["role"] if old_r.data else "operator"
     new_role = body.role
     svc.table("org_memberships").update({"role": new_role}).eq("org_id", org_id).eq("user_id", user_id).execute()
     check_role_escalation(user_id, org_id, old_role, new_role)
-    log_event("role_changed", {"user_id": user_id, "old_role": old_role, "new_role": new_role},
-              user_id=user["user_id"], org_id=org_id)
+    log_event(
+        "role_changed",
+        {"user_id": user_id, "old_role": old_role, "new_role": new_role},
+        user_id=user["user_id"],
+        org_id=org_id,
+    )
     return {"ok": True}
 
 
-# -- WebSocket
+# ─────────────────────────────────────────────────────────────────────────────
+# WebSocket — job progress
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/jobs/{job_id}")
 async def job_websocket(websocket: WebSocket, job_id: str, token: str = Query(...)):
+    # Validate UUID before touching DB
+    try:
+        validate_uuid(job_id, "job_id")
+    except HTTPException:
+        await websocket.close(code=4000, reason="Invalid job_id format")
+        return
+
     payload = validate_token(token)
     if not payload:
         await websocket.close(code=4001, reason="Invalid or expired token")
         return
 
     user_id = payload.get("sub")
-    svc = get_service_client()
+    svc     = get_service_client()
+
     job_r = svc.table("wipe_jobs").select("user_id,org_id").eq("id", job_id).maybe_single().execute()
     if not job_r.data:
         await websocket.close(code=4004, reason="Job not found")
@@ -1161,12 +1473,14 @@ async def job_websocket(websocket: WebSocket, job_id: str, token: str = Query(..
     org_id    = job_r.data.get("org_id")
 
     if job_owner != user_id:
-        member_r = (svc.table("org_memberships")
-                    .select("role")
-                    .eq("org_id", org_id or "")
-                    .eq("user_id", user_id)
-                    .maybe_single()
-                    .execute())
+        member_r = (
+            svc.table("org_memberships")
+            .select("role")
+            .eq("org_id", org_id or "")
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
         if not member_r.data:
             await websocket.close(code=4003, reason="Forbidden")
             return
@@ -1179,10 +1493,13 @@ async def job_websocket(websocket: WebSocket, job_id: str, token: str = Query(..
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        connected_websockets[room].remove(websocket)
+        if websocket in connected_websockets.get(room, []):
+            connected_websockets[room].remove(websocket)
 
 
-# -- Background job execution
+# ─────────────────────────────────────────────────────────────────────────────
+# Background job execution (unchanged core logic)
+# ─────────────────────────────────────────────────────────────────────────────
 
 class _CancelledError(Exception):
     pass
@@ -1302,7 +1619,7 @@ def _execute_job(job_id: str):
         verification  = None
 
         if job.get("device_type") == "file":
-            # ── FILE / FOLDER PATH — logic unchanged ──────────────────────
+            # ── FILE / FOLDER PATH ─────────────────────────────────────────
             raw_paths = job.get("file_paths")
             if raw_paths:
                 try:
@@ -1335,7 +1652,7 @@ def _execute_job(job_id: str):
             verification = True
 
         else:
-            # ── HARDWARE PATH ─────────────────────────────────────────────
+            # ── HARDWARE PATH ──────────────────────────────────────────────
             device = get_device_by_serial(target_serial)
             if not device:
                 raise RuntimeError("Device not found during execution")
@@ -1381,8 +1698,7 @@ def _execute_job(job_id: str):
                 return
 
             else:
-                # full_sanitization hardware path — crypto-erase only,
-                # no raw device access required (avoids Error 5 / admin lock issues)
+                # full_sanitization hardware path
                 from backend.sanitizer import run_full_sanitization
                 gen = run_full_sanitization(node, standard, job["device_type"])
                 crypto_key = None
@@ -1409,7 +1725,7 @@ def _execute_job(job_id: str):
                 _finalize_job_with_retry(job_id, job, crypto_key, broadcast)
                 return
 
-        # Shared finalization for file/folder path and binary_overwrite hardware path
+        # Shared finalization for file/folder and binary_overwrite paths
         if verification is False:
             check_verification_failure(job_id, job.get("org_id"), job["user_id"])
 
@@ -1433,8 +1749,12 @@ def _execute_job(job_id: str):
                     "status":        "failed",
                     "error_message": str(exc),
                 }, job_id)
-                log_event("wipe_job_failed", {"job_id": job_id, "error": str(exc)},
-                          user_id=job["user_id"], org_id=job.get("org_id"))
+                log_event(
+                    "wipe_job_failed",
+                    {"job_id": job_id, "error": str(exc)},
+                    user_id=job["user_id"],
+                    org_id=job.get("org_id"),
+                )
                 broadcast({"type": "error", "error": str(exc)})
         except Exception:
             pass
@@ -1460,13 +1780,21 @@ def _finalize_job(job_id: str, job: dict, crypto_key: str | None, broadcast):
     updated_job = r.data or job
 
     user_r = get_service_client().auth.admin.get_user_by_id(job["user_id"])
-    user   = ({"id": job["user_id"], "email": getattr(user_r.user, "email", "")}
-              if user_r.user else {"id": job["user_id"], "email": ""})
+    user   = (
+        {"id": job["user_id"], "email": getattr(user_r.user, "email", "")}
+        if user_r.user else {"id": job["user_id"], "email": ""}
+    )
 
     org = None
     if job.get("org_id"):
-        org_r = svc.table("organisations").select("name").eq("id", job["org_id"]).maybe_single().execute()
-        org   = org_r.data
+        org_r = (
+            svc.table("organisations")
+            .select("name")
+            .eq("id", job["org_id"])
+            .maybe_single()
+            .execute()
+        )
+        org = org_r.data
 
     approver = None
     if updated_job.get("approved_by"):
@@ -1482,10 +1810,16 @@ def _finalize_job(job_id: str, job: dict, crypto_key: str | None, broadcast):
         "pdf_path":       cert_result["pdf_path"],
     }, job_id)
 
-    log_event("wipe_job_completed",
-              {"job_id": job_id, "sha256_hash": cert_result["fields"]["sha256_hash"],
-               "cert_id": cert_result["certificate_id"]},
-              user_id=job["user_id"], org_id=job.get("org_id"))
+    log_event(
+        "wipe_job_completed",
+        {
+            "job_id":     job_id,
+            "sha256_hash": cert_result["fields"]["sha256_hash"],
+            "cert_id":    cert_result["certificate_id"],
+        },
+        user_id=job["user_id"],
+        org_id=job.get("org_id"),
+    )
 
     check_repeat_wipe(job["device_serial"], job.get("org_id"), job["user_id"])
 
@@ -1499,7 +1833,9 @@ def _finalize_job(job_id: str, job: dict, crypto_key: str | None, broadcast):
     })
 
 
-# -- SPA + static
+# ─────────────────────────────────────────────────────────────────────────────
+# SPA + static asset serving
+# ─────────────────────────────────────────────────────────────────────────────
 
 if FRONTEND_DIST.exists():
     app.mount("/app/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
@@ -1513,7 +1849,10 @@ async def serve_spa(full_path: str = ""):
     index = FRONTEND_DIST / "index.html"
     if index.exists():
         return HTMLResponse(index.read_text(encoding="utf-8"))
-    raise HTTPException(status_code=404, detail="Frontend not built. Run: cd frontend && npm run build")
+    raise HTTPException(
+        status_code=404,
+        detail="Frontend not built. Run: cd frontend && npm run build",
+    )
 
 
 def create_app():
