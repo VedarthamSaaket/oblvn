@@ -8,7 +8,7 @@ Secure Data Obliteration Platform. Military-grade data destruction for HDDs, SSD
 
 - Python 3.11+
 - Node.js 18+ (for frontend build)
-- A [Supabase](https://supabase.com) project (free tier is sufficient)
+- A [MongoDB Atlas](https://www.mongodb.com/atlas) cluster (the free M0 tier is enough to start)
 - Physical storage drives connected (or use `--dry-run` for development)
 - Elevated privileges: `sudo` on Linux/macOS, Administrator on Windows
 
@@ -30,27 +30,30 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` and fill in your Supabase credentials from your Supabase dashboard under Settings > API:
+Edit `.env` and fill in at least these values.
+MONGODB_URI is the connection string from Atlas (Connect, then Drivers).
+OBLVN_JWT_SECRET and OBLVN_SECRET_KEY must each be 32 or more random characters, for example from python -c "import secrets; print(secrets.token_urlsafe(48))".
+FIREBASE_PROJECT_ID turns on Google sign-in.
+SMTP_HOST, SMTP_USER, SMTP_PASSWORD and SMTP_FROM turn on account emails; without them links are printed in the server log.
 
 ```
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-FLASK_SECRET_KEY=any-long-random-string
+MONGODB_URI=mongodb+srv://user:password@cluster0.xxxxx.mongodb.net/
+OBLVN_JWT_SECRET=a-long-random-string
+OBLVN_SECRET_KEY=another-long-random-string
 ```
 
 **3. Set up the database**
 
-In your Supabase dashboard, go to the SQL Editor and run the contents of `supabase/schema.sql`. This creates all tables, RLS policies, triggers, and enables Realtime for wipe job progress.
-
-Then run every file in supabase/migrations in number order.
+Nothing to run by hand.
+On first start OBLVN creates every collection, its validation rules and its indexes in the database named by MONGODB_DB (default oblvn).
+In Atlas, allow your server's IP under Network Access.
 
 **4. Build the frontend**
 
 ```bash
 cd frontend
 cp .env.example .env
-# Fill in VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY
+# Fill in VITE_API_BASE_URL and, for Google sign-in, the four VITE_FIREBASE_* values
 npm install
 npm run build
 cd ..
@@ -91,18 +94,16 @@ oblvn/
     anomaly.py            Rule-based + statistical anomaly detection engine
     auth.py               JWT validation + role helpers
     config.py             Environment configuration
-    supabase_client.py    Supabase client singletons
+    db/                   MongoDB data layer, schema, indexes and access policies
+    accounts/             Accounts: Argon2id passwords, sessions, 2FA, Google sign-in, email
   frontend/
     src/pages/            React pages (one per SRS feature)
     src/components/       Shared UI components
     src/lib/api.js        Flask API client
-    src/lib/supabase.js   Supabase client
+    src/lib/firebase.js   Firebase client for Google sign-in
     public/landing.html   Static landing page
   agent/                  Linux wipe agent and live USB build config
   ml/                     Anomaly models, training and Backblaze scripts
-  supabase/
-    schema.sql            PostgreSQL schema, RLS policies, triggers
-    migrations/           Run these in order after schema.sql
   tests/
     unit/                 Unit tests per backend module
     integration/          API integration tests
@@ -219,7 +220,8 @@ Create an organisation from the Organisation page. Then:
 | Team Lead | Approve/reject operator jobs, see team jobs and anomalies |
 | Org Admin | Full org access, billing, settings, member management, all audit logs |
 
-All org roles require 2FA via Supabase MFA.
+Any account can turn on two-factor sign-in with an authenticator app (TOTP) through /api/auth/2fa/setup and /api/auth/2fa/enable.
+Accounts can sign in with email and password or with Google (Firebase).
 
 ---
 
