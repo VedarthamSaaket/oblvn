@@ -50,6 +50,7 @@ class Config:
     VERIFY_BASE_URL: str = os.environ.get("OBLVN_VERIFY_BASE_URL", "http://localhost:5173")
     PUBLIC_URL: str = os.environ.get("OBLVN_PUBLIC_URL", os.environ.get("OBLVN_VERIFY_BASE_URL", "http://localhost:5173"))
     DATA_DIR: Path = Path(os.path.expanduser(os.environ.get("OBLVN_DATA_DIR", "~/.oblvn")))
+    OTS_ENABLED: bool = _bool("OBLVN_OTS_ENABLED", True)
     OTS_CALENDAR_URL: str = os.environ.get("OTS_CALENDAR_URL", "https://alice.btc.calendar.opentimestamps.org")
     AUTH_RATE_LIMIT: str = os.environ.get("AUTH_RATE_LIMIT", "20") + " per minute"
     ANOMALY_BASELINE_MIN_EVENTS: int = 30

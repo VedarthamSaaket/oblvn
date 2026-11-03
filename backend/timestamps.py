@@ -49,6 +49,9 @@ def _ots_stamp(digest_hex: str, ots_path: Path) -> dict:
 
 
 def stamp_certificate(cert_hash_hex: str, cert_id: str) -> dict:
+    if not config.OTS_ENABLED:
+        return {"cert_id": cert_id, "cert_hash": cert_hash_hex, "ots_file": None, "pending": False,
+                "error": "OpenTimestamps anchoring is turned off (OBLVN_OTS_ENABLED=false)"}
     ots_dir = config.DATA_DIR / "ots"
     ots_dir.mkdir(parents=True, exist_ok=True)
     ots_path = ots_dir / f"{cert_id}.ots"
