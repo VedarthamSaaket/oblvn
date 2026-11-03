@@ -117,3 +117,25 @@ def test_behaviour_falls_back_to_global_model(models_dir):
                 "status": "cancelled"} for m in range(1, 30)]
     found = behaviour.score_job(odd, history, odd["created_at"], "UTC", "some-org-without-a-model")
     assert found and found[0]["details"]["model_scope"] == "global"
+
+
+def test_registry_promotion_guard(models_dir):
+    from ml import registry
+    first = registry.promote("global", "toy", {"v": 1}, {"samples": 1}, 0.80, None, "ap")
+    assert first["promotion"]["decision"] == "promoted"
+    worse = registry.promote("global", "toy", {"v": 2}, {"samples": 2}, 0.70, 0.80, "ap")
+    assert worse["promotion"]["decision"] == "rejected"
+    assert registry.load("global", "toy")["model"] == {"v": 1}
+    better = registry.promote("global", "toy", {"v": 3}, {"samples": 3}, 0.795, 0.80, "ap")
+    assert better["promotion"]["decision"] == "promoted" and registry.load("global", "toy")["model"] == {"v": 3}
+    history = sorted(p.name for p in (models_dir / "global" / "history").glob("toy-*.joblib"))
+    assert len(history) == 2 and any("rejected" in h for h in history)
+    lines = (models_dir / "global" / "promotions.jsonl").read_text().splitlines()
+    assert [__import__("json").loads(l)["decision"] for l in lines] == ["promoted", "rejected", "promoted"]
+
+
+def test_duration_retrain_reports_promotion(models_dir):
+    first = wipe_duration.train(synthetic_jobs(), "individual")
+    second = wipe_duration.train(synthetic_jobs(seed=8), "individual")
+    assert first["promotion"]["decision"] == "promoted"
+    assert second["promotion"]["incumbent"] is not None

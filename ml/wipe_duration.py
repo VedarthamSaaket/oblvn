@@ -37,6 +37,10 @@ def train(jobs: list[dict], scope: str) -> dict | None:
     lo, mid, hi = (models[q].predict(X[test_idx]) for q in QUANTILES)
     coverage = float(np.mean((y[test_idx] >= lo) & (y[test_idx] <= hi))) if len(test_idx) else None
     mae = float(mean_absolute_error(y[test_idx], mid)) if len(test_idx) else None
+    incumbent = None
+    current = registry.load(scope, NAME)
+    if current and current["meta"].get("features") == DURATION_FEATURES and len(test_idx):
+        incumbent = float(mean_absolute_error(y[test_idx], current["model"][0.5].predict(X[test_idx])))
     for q in QUANTILES:
         models[q].fit(X, y)
     meta = {
@@ -46,7 +50,8 @@ def train(jobs: list[dict], scope: str) -> dict | None:
         "params": PARAMS,
         "holdout": {"size": int(len(test_idx)), "interval_coverage_90": coverage, "median_mae_log_seconds": mae},
     }
-    return registry.save(scope, NAME, models, meta)
+    return registry.promote(scope, NAME, models, meta, mae, incumbent, "holdout median MAE (log seconds)",
+                            higher_is_better=False, tolerance=0.02)
 
 
 def physics_findings(job: dict, record: dict) -> list[dict]:
