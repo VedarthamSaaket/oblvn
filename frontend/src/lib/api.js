@@ -28,20 +28,15 @@ async function attemptRefresh() {
 
   refreshPromise = (async () => {
     try {
-      const refresh_token = localStorage.getItem('oblvn_refresh')
-      if (!refresh_token) throw new Error('No refresh token available')
-
       const res = await fetch(`${BASE}/auth/refresh`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token }),
+        credentials: 'include',
       })
 
       if (!res.ok) throw new Error('Session refresh failed')
 
       const data = await res.json()
       if (data.access_token) localStorage.setItem('oblvn_token', data.access_token)
-      if (data.refresh_token) localStorage.setItem('oblvn_refresh', data.refresh_token)
 
       return data
     } catch (error) {
@@ -61,6 +56,7 @@ async function req(method, path, body, isRetry = false, responseType = 'json') {
 
   const opts = {
     method,
+    credentials: 'include',
     headers: isFormData ? { ...(token() ? { Authorization: `Bearer ${token()}` } : {}) } : headers(),
   }
 
@@ -96,6 +92,7 @@ async function req(method, path, body, isRetry = false, responseType = 'json') {
 async function publicPost(path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
@@ -106,7 +103,6 @@ async function publicPost(path, body) {
 
 function storeSession(data) {
   if (data.access_token) localStorage.setItem('oblvn_token', data.access_token)
-  if (data.refresh_token) localStorage.setItem('oblvn_refresh', data.refresh_token)
   if (data.user) localStorage.setItem('oblvn_user', JSON.stringify(data.user))
   return data
 }
@@ -118,6 +114,8 @@ const buildQuery = (params) => {
   const q = new URLSearchParams(cleanParams).toString();
   return q ? `?${q}` : '';
 }
+
+export const WS_BASE = BASE.replace(/\/api\/?$/, '').replace(/^http/, 'ws')
 
 export const api = {
   utils: {
@@ -181,6 +179,7 @@ export const api = {
     get: (id) => req('GET', `/jobs/${id}`),
     approve: (id, org_id) => req('POST', `/jobs/${id}/approve`, { org_id }),
     cancel: (id) => req('POST', `/jobs/${id}/cancel`),
+    wsTicket: (id) => req('POST', `/jobs/${id}/ws-ticket`),
   },
 
   certificates: {

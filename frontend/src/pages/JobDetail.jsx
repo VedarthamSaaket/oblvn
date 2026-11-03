@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { api } from '../lib/api'
+import { api, WS_BASE } from '../lib/api'
 import { useToast } from '../components/Toast'
 import SectionRule from '../components/SectionRule'
 import { BtnSolid, BtnGhost } from '../components/Btn'
@@ -153,10 +153,16 @@ export default function JobDetail() {
     }
   }
 
-  function connectWS(token) {
+  async function connectWS() {
     if (wsRef.current) return
-    const wsUrl = `ws://localhost:8000/ws/jobs/${id}?token=${token}`
-    const ws = new WebSocket(wsUrl)
+    let ticket
+    try {
+      ticket = (await api.jobs.wsTicket(id)).ticket
+    } catch {
+      return
+    }
+    if (wsRef.current) return
+    const ws = new WebSocket(`${WS_BASE}/ws/jobs/${id}?ticket=${encodeURIComponent(ticket)}`)
     wsRef.current = ws
 
     ws.onmessage = (e) => {
@@ -217,11 +223,8 @@ export default function JobDetail() {
   useEffect(() => {
     loadJob().then(j => {
       if (!j) return
-      const token = localStorage.getItem('oblvn_token') || sessionStorage.getItem('oblvn_token')
-      if (!token) return
-
       if (['queued', 'running'].includes(j.status)) {
-        connectWS(token)
+        connectWS()
         startPolling()
       }
 

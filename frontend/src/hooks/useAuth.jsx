@@ -33,23 +33,13 @@ export function AuthProvider({ children }) {
         if (refreshTimer.current) clearTimeout(refreshTimer.current)
 
         refreshTimer.current = setTimeout(async () => {
-            const refresh = localStorage.getItem('oblvn_refresh')
-            if (!refresh) return
-
             try {
-                const data = await api.auth.refresh(refresh)
-
-                if (data.access_token) {
-                    localStorage.setItem('oblvn_token', data.access_token)
-                    if (data.refresh_token) {
-                        localStorage.setItem('oblvn_refresh', data.refresh_token)
-                    }
-                    scheduleRefresh()
-                }
+                const data = await api.auth.refresh()
+                if (data.access_token) scheduleRefresh()
             } catch {
                 clearAuth()
             }
-        }, 55 * 60 * 1000)
+        }, 13 * 60 * 1000)
     }, [clearAuth])
 
     // 🔴 FIXED INIT LOGIC
