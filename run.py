@@ -38,7 +38,10 @@ def _start_tk_worker():
     Must be called before uvicorn.run() blocks the main thread.
     """
     from backend import tk_worker
-    tk_worker.start()
+    try:
+        tk_worker.start()
+    except Exception as exc:
+        print(f"[OBLVN] native file picker unavailable ({exc}); file wipes still work via file_paths")
 
 
 def main():
