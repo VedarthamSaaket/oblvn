@@ -3,6 +3,7 @@ import { useAuth } from './hooks/useAuth'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import ResetPassword from './pages/ResetPassword'
 import Dashboard from './pages/Dashboard'
 import Devices from './pages/Devices'
 import Jobs from './pages/Jobs'
@@ -25,6 +26,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
 
       <Route path="/*" element={
         <Guard>
