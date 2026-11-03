@@ -10,17 +10,13 @@ import time
 from collections.abc import Generator
 
 from backend.config import config
-# Replace _wipe_windows with this — everything else in the file stays the same
-
-import winreg  # add to imports at top of file
-
-
 def _is_usb_write_protected() -> bool:
     """
     Check the Windows StorageDevicePolicy registry key that silently
     write-protects ALL removable drives system-wide.
     """
     try:
+        import winreg
         key = winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,
             r"SYSTEM\CurrentControlSet\Control\StorageDevicePolicies",
@@ -446,44 +442,6 @@ def _wipe_windows_volume_fill(
         os.rmdir(tmp_dir)
     except OSError:
         pass
-
-
-def _wipe_windows(node: str, passes: list[dict]) -> Generator[dict, None, None]:
-    """
-    Windows USB / external-drive wipe. No Administrator required.
-
-    Resolves the physical drive number to its mounted drive letter, then
-    fills the entire volume with overwrite-pattern data via normal file writes.
-    """
-    total      = len(passes)
-    disk_index = _get_disk_index(node)
-
-    if DRY_RUN:
-        for i, p in enumerate(passes, 1):
-            for pct in range(0, 101, 10):
-                time.sleep(0.05)
-                yield _progress(i, total, float(pct), f"[DRY RUN] {p['label']}")
-        return
-
-    yield _progress(1, total, 0.0, f"Locating volume for Disk {disk_index}…")
-
-    drive_letter = _get_volume_letter(disk_index)
-
-    if not drive_letter:
-        raise RuntimeError(
-            f"Disk {disk_index} has no mounted volume with a drive letter. "
-            "Open Disk Management (Win + R → diskmgmt.msc), right-click the "
-            "partition and choose 'Change Drive Letter and Paths…' to assign "
-            "one, then retry."
-        )
-
-    yield _progress(
-        1, total, 1.0,
-        f"Wiping {drive_letter}: — {total} pass{'es' if total > 1 else ''} "
-        f"(no Administrator required)…",
-    )
-
-    yield from _wipe_windows_volume_fill(drive_letter, passes)
 
 
 # ---------------------------------------------------------------------------

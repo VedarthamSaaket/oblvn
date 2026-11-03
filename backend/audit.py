@@ -5,27 +5,8 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from weasyprint import HTML
+from backend.platform_env import weasy_html
 from backend.supabase_client import get_service_client
-import os
-import os
-import sys
-
-# --- FORCED FONTCONFIG INJECTION ---
-gtk_fonts_dir = r"C:\Program Files\GTK3-Runtime Win64\etc\fonts"
-fonts_conf_file = rf"{gtk_fonts_dir}\fonts.conf"
-
-# Verify the file actually exists on your hard drive
-if not os.path.exists(fonts_conf_file):
-    print(f"\n[CRITICAL ERROR] Fontconfig file is literally missing: {fonts_conf_file}")
-    print("GTK might be installed in a different folder, or the installation is broken.\n")
-else:
-    # Force both variables into the OS environment before WeasyPrint loads
-    os.environ["FONTCONFIG_PATH"] = gtk_fonts_dir
-    os.environ["FONTCONFIG_FILE"] = fonts_conf_file
-
-# NOW we can safely import WeasyPrint
-from weasyprint import HTML
 
 def _hash_entry(payload: dict, prev_hash: str) -> str:
     content = json.dumps(payload, sort_keys=True, separators=(",", ":")) + prev_hash
@@ -351,4 +332,4 @@ def export_pdf(org_id: str | None = None, start: str | None = None,
     """
 
     # WeasyPrint directly returns bytes when `target` is not specified
-    return HTML(string=html_content).write_pdf()
+    return weasy_html()(string=html_content).write_pdf()

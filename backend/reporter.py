@@ -7,9 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import qrcode
-from weasyprint import HTML, CSS
-
 from backend.config import config
+from backend.platform_env import font_face, weasy_html
 from backend.timestamps import stamp_certificate
 
 
@@ -68,10 +67,11 @@ def _generate_html(cert: dict, qr_b64: str) -> str:
     else:
         ots_status = "Immutable blockchain proof anchored"
 
-    # Font URIs — Windows absolute paths; adjust for your deployment
-    playfair_uri  = Path(r"C:\Users\Saaket Vedarth\PlayfairDisplay-Bold.ttf").as_uri()
-    mono_reg_uri  = Path(r"C:\Users\Saaket Vedarth\IBMPlexMono-Regular.ttf").as_uri()
-    mono_bold_uri = Path(r"C:\Users\Saaket Vedarth\IBMPlexMono-Bold.ttf").as_uri()
+    font_faces = "\n".join(filter(None, [
+        font_face("Playfair Display", "PlayfairDisplay-Bold.ttf", 700),
+        font_face("IBM Plex Mono", "IBMPlexMono-Regular.ttf", 400),
+        font_face("IBM Plex Mono", "IBMPlexMono-Bold.ttf", 700),
+    ]))
 
     ots_block = ""
     if ots:
@@ -90,21 +90,7 @@ def _generate_html(cert: dict, qr_b64: str) -> str:
 <meta charset="UTF-8">
 <style>
   /* ── Fonts ───────────────────────────────────────────── */
-  @font-face {{
-    font-family: 'Playfair Display';
-    src: url('{playfair_uri}');
-    font-weight: 700;
-  }}
-  @font-face {{
-    font-family: 'IBM Plex Mono';
-    src: url('{mono_reg_uri}');
-    font-weight: 400;
-  }}
-  @font-face {{
-    font-family: 'IBM Plex Mono';
-    src: url('{mono_bold_uri}');
-    font-weight: 700;
-  }}
+  {font_faces}
 
   /* ── Page ────────────────────────────────────────────── */
   @page {{
@@ -478,7 +464,7 @@ def generate_certificate(
     pdf_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = pdf_dir / f"{cert_id}.pdf"
 
-    HTML(string=html_content).write_pdf(target=str(pdf_path))
+    weasy_html()(string=html_content).write_pdf(target=str(pdf_path))
 
     ots_path = config.DATA_DIR / "ots" / f"{cert_id}.ots"
 

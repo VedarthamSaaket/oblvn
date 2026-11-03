@@ -6,20 +6,9 @@ import time
 import webbrowser
 from pathlib import Path
 
-# 1. GTK Fontconfig setup
-gtk_dir = r"C:\Program Files\GTK3-Runtime Win64"
-fonts_dir = rf"{gtk_dir}\etc\fonts"
-fonts_file = rf"{fonts_dir}\fonts.conf"
+from backend.platform_env import configure_fontconfig
 
-if not os.path.exists(fonts_file):
-    print("\n" + "="*60)
-    print(f"❌ FATAL: Cannot find GTK Fontconfig at:\n{fonts_file}")
-    print("Check where you actually installed GTK3 and update 'gtk_dir' in run.py!")
-    print("="*60 + "\n")
-    sys.exit(1)
-
-os.environ["FONTCONFIG_PATH"] = fonts_dir
-os.environ["FONTCONFIG_FILE"] = fonts_file
+configure_fontconfig()
 
 import uvicorn
 
