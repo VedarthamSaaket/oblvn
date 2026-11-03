@@ -30,8 +30,8 @@ class Config:
     REQUIRE_EMAIL_VERIFICATION: bool = _bool("OBLVN_REQUIRE_EMAIL_VERIFICATION", bool(os.environ.get("SMTP_HOST")))
     FIREBASE_PROJECT_ID: str = os.environ.get("FIREBASE_PROJECT_ID", "")
     LOCAL_OPS: str = os.environ.get("OBLVN_LOCAL_OPS", "loopback").strip().lower()
-    ENV: str = os.environ.get("FLASK_ENV", "development")
-    DEBUG: bool = os.environ.get("FLASK_ENV", "development") == "development"
+    ENV: str = (os.environ.get("FLASK_ENV") or "production").strip().lower()
+    DEBUG: bool = (os.environ.get("FLASK_ENV") or "production").strip().lower() == "development"
     DRY_RUN: bool = os.environ.get("OBLVN_DRY_RUN", "0") == "1"
     VERIFY_BASE_URL: str = os.environ.get("OBLVN_VERIFY_BASE_URL", "http://localhost:5173")
     PUBLIC_URL: str = os.environ.get("OBLVN_PUBLIC_URL", os.environ.get("OBLVN_VERIFY_BASE_URL", "http://localhost:5173"))

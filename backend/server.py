@@ -143,7 +143,9 @@ class PasswordUpdateBody(BaseModel):
 
 limiter = Limiter(key_func=get_remote_address)
 
-app = FastAPI(title="OBLVN")
+_docs = config.ENV == "development"
+app = FastAPI(title="OBLVN", docs_url="/docs" if _docs else None, redoc_url="/redoc" if _docs else None,
+              openapi_url="/openapi.json" if _docs else None)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -244,7 +246,8 @@ async def landing():
 
 
 @app.get("/verify/{cert_id}")
-async def verify_certificate(cert_id: str):
+@limiter.limit("60 per minute")
+async def verify_certificate(request: Request, cert_id: str):
     validate_uuid(cert_id, "cert_id")
     svc = get_service_client()
     r = (
@@ -950,7 +953,7 @@ async def list_jobs(request: Request, org_id: Optional[str] = Query(None)):
         q = scoped.table("wipe_jobs").select("*").order("created_at", desc=True).eq("user_id", user["user_id"])
 
     r = q.execute()
-    return {"jobs": r.data or []}
+    return {"jobs": [public_job(j) for j in r.data or []]}
 
 
 @app.post("/api/jobs", status_code=201)
@@ -1071,7 +1074,7 @@ async def create_job(request: Request):
     if status == "queued" and not agent_id:
         jobs.start(created["id"])
 
-    return JSONResponse(content=created, status_code=201)
+    return JSONResponse(content=public_job(created), status_code=201)
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1087,7 +1090,7 @@ async def get_job(job_id: str, request: Request):
 
     # IDOR: assert the requester owns this job or is an org member
     assert_job_access(job, user["user_id"], svc)
-    return job
+    return public_job(job)
 
 
 @app.post("/api/jobs/{job_id}/approve")
@@ -1171,7 +1174,7 @@ async def get_certificate(job_id: str, request: Request):
 
     # IDOR: assert_certificate_access fetches + checks ownership
     job = assert_certificate_access(job_id, user["user_id"], svc)
-    return job
+    return public_job(job)
 
 
 @app.get("/api/certificates/{job_id}/download")
@@ -1401,9 +1404,9 @@ async def update_org(org_id: str, request: Request):
         raise HTTPException(status_code=403, detail="Requires org_admin")
 
     data    = await request.json()
-    allowed = {"approval_gate_enabled", "audit_retention_days",
-               "anomaly_sensitivity", "data_minimisation_config", "name"}
-    update  = {k: v for k, v in data.items() if k in allowed}
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    update  = _org_update(data)
 
     # Validate sensitivity if it's being updated
     if "anomaly_sensitivity" in update:
@@ -1468,6 +1471,10 @@ async def revoke_member(org_id: str, user_id: str, request: Request):
         raise HTTPException(status_code=403, detail="Requires org_admin")
 
     svc = get_service_client()
+    admins = svc.table("org_memberships").select("user_id", count="exact").eq("org_id", org_id).eq("role", "org_admin").execute()
+    target = svc.table("org_memberships").select("role").eq("org_id", org_id).eq("user_id", user_id).maybe_single().execute().data
+    if target and target.get("role") == "org_admin" and (admins.count or 0) <= 1:
+        raise HTTPException(status_code=409, detail="An organisation must keep at least one org_admin")
     svc.table("org_memberships").delete().eq("org_id", org_id).eq("user_id", user_id).execute()
     log_event("member_revoked", {"user_id": user_id}, user_id=user["user_id"], org_id=org_id)
     return {"ok": True}
@@ -1496,6 +1503,10 @@ async def change_role(org_id: str, user_id: str, request: Request, body: RoleBod
     )
     old_role = old_r.data["role"] if old_r.data else "operator"
     new_role = body.role
+    if old_role == "org_admin" and new_role != "org_admin":
+        admins = svc.table("org_memberships").select("user_id", count="exact").eq("org_id", org_id).eq("role", "org_admin").execute()
+        if (admins.count or 0) <= 1:
+            raise HTTPException(status_code=409, detail="An organisation must keep at least one org_admin")
     svc.table("org_memberships").update({"role": new_role}).eq("org_id", org_id).eq("user_id", user_id).execute()
     check_role_escalation(user_id, org_id, old_role, new_role)
     log_event(
@@ -1561,6 +1572,55 @@ async def job_websocket(websocket: WebSocket, job_id: str, token: str = Query(..
     finally:
         if websocket in realtime.connected.get(room, []):
             realtime.connected[room].remove(websocket)
+
+
+def _org_update(data: dict) -> dict:
+    out = {}
+    if "name" in data:
+        name = data["name"]
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 255:
+            raise HTTPException(status_code=400, detail="name must be 1 to 255 characters")
+        out["name"] = name.strip()
+    if "approval_gate_enabled" in data:
+        if not isinstance(data["approval_gate_enabled"], bool):
+            raise HTTPException(status_code=400, detail="approval_gate_enabled must be true or false")
+        out["approval_gate_enabled"] = data["approval_gate_enabled"]
+    if "audit_retention_days" in data:
+        days = data["audit_retention_days"]
+        if not isinstance(days, int) or isinstance(days, bool) or not 30 <= days <= 36500:
+            raise HTTPException(status_code=400, detail="audit_retention_days must be a whole number from 30 to 36500")
+        out["audit_retention_days"] = days
+    if "anomaly_sensitivity" in data:
+        out["anomaly_sensitivity"] = data["anomaly_sensitivity"]
+    if "timezone" in data:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(str(data["timezone"]))
+        except (ZoneInfoNotFoundError, ValueError):
+            raise HTTPException(status_code=400, detail="timezone must be an IANA name such as Asia/Kolkata")
+        out["timezone"] = str(data["timezone"])
+    for key, lo, hi in (("work_start_hour", 0, 23), ("work_end_hour", 1, 24)):
+        if key in data:
+            v = data[key]
+            if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+                raise HTTPException(status_code=400, detail=f"{key} must be a whole number from {lo} to {hi}")
+            out[key] = v
+    if "data_minimisation_config" in data:
+        cfg = data["data_minimisation_config"]
+        if cfg is not None and (not isinstance(cfg, dict) or len(json.dumps(cfg)) > 10000):
+            raise HTTPException(status_code=400, detail="data_minimisation_config must be an object under 10 KB")
+        out["data_minimisation_config"] = cfg
+    return out
+
+
+def public_job(job: dict | None) -> dict | None:
+    if not job:
+        return job
+    out = dict(job)
+    options = out.get("options")
+    if isinstance(options, dict) and "psid" in options:
+        out["options"] = {**{k: v for k, v in options.items() if k != "psid"}, "psid_set": True}
+    return out
 
 
 def _job_options(raw) -> dict:

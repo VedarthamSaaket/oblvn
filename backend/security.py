@@ -29,6 +29,27 @@ from starlette.types import ASGIApp
 # 1. Security Headers Middleware
 # ─────────────────────────────────────────────────────────────────────────────
 
+def content_security_policy() -> str:
+    from backend.config import config
+    auth_domain = f"https://{config.FIREBASE_PROJECT_ID}.firebaseapp.com" if config.FIREBASE_PROJECT_ID else ""
+    parts = [
+        "default-src 'self'",
+        "script-src 'self' https://apis.google.com",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "img-src 'self' data: blob:",
+        "font-src 'self' data: https://fonts.gstatic.com",
+        "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com",
+        " ".join(filter(None, ["frame-src 'self'", auth_domain, "https://accounts.google.com"])),
+        "worker-src 'self' blob:",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "object-src 'none'",
+        "upgrade-insecure-requests" if config.ENV == "production" else "",
+    ]
+    return "; ".join(p for p in parts if p)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """
     Inject hardened HTTP security headers into every response.
@@ -54,25 +75,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["X-XSS-Protection"] = "0"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        path = request.url.path
+        if path.startswith(("/api/", "/verify/", "/ws/")):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=(), "
             "payment=(), usb=(), bluetooth=(), interest-cohort=()"
         )
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; "
-            "font-src 'self' data:; "
-            "connect-src 'self'; "
-            "worker-src 'self' blob:; "
-            "frame-ancestors 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self'; "
-            "object-src 'none';"
-        )
+        response.headers["Content-Security-Policy"] = content_security_policy()
 
         # HSTS — only enforce in production to avoid dev-loop headaches
         try:
@@ -303,6 +318,8 @@ def validate_password_strength(password: str) -> None:
     """
     if not password:
         raise HTTPException(status_code=400, detail="Password is required")
+    if len(password) > 128:
+        raise HTTPException(status_code=400, detail="Password must be at most 128 characters")
 
     failures = []
     if len(password) < 8:
