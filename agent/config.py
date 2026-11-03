@@ -14,6 +14,7 @@ class AgentConfig:
     token: str
     name: str = ""
     ca_bundle: str | None = None
+    allow_insecure: bool = False
 
     def save(self, path: Path = DEFAULT_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

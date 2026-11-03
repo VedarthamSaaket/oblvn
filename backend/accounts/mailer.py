@@ -44,6 +44,8 @@ def send(to: str, kind: str, link: str, **context) -> bool:
     if not configured():
         print(f"[MAIL] SMTP not configured; {kind} link for {to}: {link}")
         return False
+    if config.SMTP_USER and not (config.SMTP_SSL or config.SMTP_STARTTLS):
+        raise RuntimeError("refusing to send SMTP credentials without TLS; enable SMTP_STARTTLS or SMTP_SSL")
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = formataddr((config.SMTP_FROM_NAME, config.SMTP_FROM))

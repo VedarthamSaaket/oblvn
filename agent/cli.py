@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--server", required=True)
     p.add_argument("--code", required=True)
     p.add_argument("--ca-bundle")
+    p.add_argument("--allow-insecure-http", action="store_true")
     r = sub.add_parser("run")
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--once", action="store_true")
@@ -39,7 +40,7 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(inventory(), indent=2, default=str))
         return
     if args.command == "pair":
-        pair(args.server, args.code, args.ca_bundle).save(args.config)
+        pair(args.server, args.code, args.ca_bundle, args.allow_insecure_http).save(args.config)
         print(f"Paired. Config saved to {args.config}")
         return
     if hasattr(os, "geteuid") and os.geteuid() != 0 and not args.dry_run:

@@ -15,17 +15,19 @@ def _verify(ca_bundle: str | None):
     return ca_bundle or True
 
 
-def check_server_url(server: str) -> str:
+def check_server_url(server: str, allow_insecure: bool = False) -> str:
     url = urlparse(server)
     if url.scheme not in ("http", "https") or not url.netloc:
         raise ValueError(f"server must be an http(s) URL, got {server!r}")
-    if url.scheme == "http" and url.hostname not in ("localhost", "127.0.0.1"):
+    if url.scheme == "http" and url.hostname not in ("localhost", "127.0.0.1", "::1"):
+        if not allow_insecure:
+            raise ValueError(f"{server} is plain http; use https, or pass --allow-insecure-http on a trusted network")
         print(f"[agent] warning: {server} is plain http; the agent token will travel unencrypted")
     return server.rstrip("/")
 
 
-def pair(server: str, code: str, ca_bundle: str | None = None) -> AgentConfig:
-    server = check_server_url(server)
+def pair(server: str, code: str, ca_bundle: str | None = None, allow_insecure: bool = False) -> AgentConfig:
+    server = check_server_url(server, allow_insecure)
     r = httpx.post(f"{server}/api/agents/register", json={
         "code": code,
         "hostname": socket.gethostname(),
@@ -36,11 +38,12 @@ def pair(server: str, code: str, ca_bundle: str | None = None) -> AgentConfig:
         raise RuntimeError(f"pairing failed ({r.status_code}): {r.text[:300]}")
     data = r.json()
     return AgentConfig(server=server, agent_id=data["agent_id"], token=data["token"],
-                       name=data.get("name", ""), ca_bundle=ca_bundle)
+                       name=data.get("name", ""), ca_bundle=ca_bundle, allow_insecure=allow_insecure)
 
 
 class AgentClient:
     def __init__(self, cfg: AgentConfig):
+        check_server_url(cfg.server, cfg.allow_insecure)
         self.cfg = cfg
         self.http = httpx.Client(
             base_url=cfg.server,

@@ -10,6 +10,19 @@ def _bool(name: str, default: bool) -> bool:
     return default if raw in (None, "") else raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def mongo_uri_problem(uri: str) -> str | None:
+    if not uri or uri.startswith("mongodb+srv://"):
+        return None
+    if not uri.startswith("mongodb://"):
+        return "MONGODB_URI must start with mongodb+srv:// or mongodb://"
+    hosts = uri.split("://", 1)[1].split("@")[-1].split("/")[0].split("?")[0]
+    local = all(h.split(":")[0] in ("localhost", "127.0.0.1", "::1", "[::1]") for h in hosts.split(","))
+    query = uri.split("?", 1)[1].lower() if "?" in uri else ""
+    if not local and "tls=true" not in query and "ssl=true" not in query:
+        return "MONGODB_URI for a remote server must use TLS (mongodb+srv:// or ?tls=true)"
+    return None
+
+
 class Config:
     MONGODB_URI: str = os.environ.get("MONGODB_URI", "")
     MONGODB_DB: str = os.environ.get("MONGODB_DB", "oblvn")
@@ -52,6 +65,10 @@ class Config:
             problems.append("OBLVN_SECRET_KEY (at least 32 random characters)")
         if cls.SMTP_HOST and not cls.SMTP_FROM:
             problems.append("SMTP_FROM (sender address, needed when SMTP_HOST is set)")
+        if cls.SMTP_USER and not (cls.SMTP_SSL or cls.SMTP_STARTTLS):
+            problems.append("SMTP_STARTTLS or SMTP_SSL (SMTP credentials must not travel unencrypted)")
+        if mongo_uri_problem(cls.MONGODB_URI):
+            problems.append(mongo_uri_problem(cls.MONGODB_URI))
         return problems
 
 
