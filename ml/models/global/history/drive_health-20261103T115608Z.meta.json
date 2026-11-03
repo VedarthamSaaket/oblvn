@@ -1,0 +1,74 @@
+{
+  "dataset": "/Users/darthiedarte/development/oblvn/ml/data/processed/drive_health.parquet",
+  "rows": 561870,
+  "drives": 262472,
+  "date_range": [
+    "2025-07-01 00:00:00",
+    "2025-12-31 00:00:00"
+  ],
+  "label": "drive fails within the next 30 days",
+  "sampling": "all rows within 30 days before a failure, a random share of rows from drives that never failed, and no negative rows from the last 30 days (their future is unknown)",
+  "features": [
+    "smart_1_raw",
+    "smart_3_raw",
+    "smart_4_raw",
+    "smart_5_raw",
+    "smart_7_raw",
+    "smart_9_raw",
+    "smart_10_raw",
+    "smart_12_raw",
+    "smart_187_raw",
+    "smart_188_raw",
+    "smart_189_raw",
+    "smart_190_raw",
+    "smart_192_raw",
+    "smart_193_raw",
+    "smart_194_raw",
+    "smart_196_raw",
+    "smart_197_raw",
+    "smart_198_raw",
+    "smart_199_raw",
+    "smart_240_raw",
+    "smart_241_raw",
+    "smart_242_raw",
+    "log2_capacity_gib"
+  ],
+  "params": {
+    "max_iter": 300,
+    "learning_rate": 0.05,
+    "max_leaf_nodes": 31,
+    "l2_regularization": 1.0,
+    "class_weight": "balanced",
+    "random_state": 42
+  },
+  "split": {
+    "type": "time",
+    "test_from": "2025-11-01 00:00:00",
+    "test_fraction": 0.2
+  },
+  "holdout": {
+    "rows": 113649,
+    "positives": 8520,
+    "base_rate": 0.07496766359580814,
+    "average_precision": 0.6960507751890325,
+    "roc_auc": 0.9263562964695689,
+    "precision_at_0_5": 0.480447335721073,
+    "recall_at_0_5": 0.7714788732394366
+  },
+  "holdout_unseen_drives": {
+    "rows": 37038,
+    "positives": 4231,
+    "base_rate": 0.1142340299152222,
+    "average_precision": 0.7617996703593825,
+    "roc_auc": 0.9177731206764022,
+    "precision_at_0_5": 0.5976073953235455,
+    "recall_at_0_5": 0.7792484046324746
+  },
+  "thresholds": {
+    "high": 0.5,
+    "medium": 0.2
+  },
+  "name": "drive_health",
+  "scope": "global",
+  "trained_at": "2026-11-03T11:30:20.119881+00:00"
+}

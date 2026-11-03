@@ -152,5 +152,10 @@ ml/data/*
 !ml/data/.gitkeep
 ml/models/*
 !ml/models/.gitkeep
+!ml/models/global/
+ml/models/global/reports/
+!ml/data/processed/
+ml/data/processed/*
+!ml/data/processed/drive_health.meta.json
 __pycache__/
 *.pyc

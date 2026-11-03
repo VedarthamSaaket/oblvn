@@ -1,0 +1,368 @@
+{
+  "dataset": "/Users/darthiedarte/development/oblvn/ml/data/processed/drive_health.parquet",
+  "rows": 1860653,
+  "drives": 352168,
+  "date_range": [
+    "2025-01-01",
+    "2026-06-30"
+  ],
+  "label": "drive fails within the next 30 days",
+  "sampling": "all rows within 30 days before a failure, a random share of rows from drives that never failed weighted back to their real count, and no negative rows from the last 30 days",
+  "features": [
+    "smart_1_raw",
+    "smart_3_raw",
+    "smart_4_raw",
+    "smart_5_raw",
+    "smart_7_raw",
+    "smart_9_raw",
+    "smart_10_raw",
+    "smart_12_raw",
+    "smart_187_raw",
+    "smart_188_raw",
+    "smart_189_raw",
+    "smart_190_raw",
+    "smart_192_raw",
+    "smart_193_raw",
+    "smart_194_raw",
+    "smart_196_raw",
+    "smart_197_raw",
+    "smart_198_raw",
+    "smart_199_raw",
+    "smart_240_raw",
+    "smart_241_raw",
+    "smart_242_raw",
+    "log2_capacity_gib",
+    "smart_5_delta_7d",
+    "smart_187_delta_7d",
+    "smart_188_delta_7d",
+    "smart_197_delta_7d",
+    "smart_198_delta_7d",
+    "smart_199_delta_7d",
+    "smart_5_delta_30d",
+    "smart_187_delta_30d",
+    "smart_188_delta_30d",
+    "smart_197_delta_30d",
+    "smart_198_delta_30d",
+    "smart_199_delta_30d",
+    "maker_seagate",
+    "maker_wdc",
+    "maker_hgst",
+    "maker_toshiba",
+    "maker_other"
+  ],
+  "params": {
+    "max_iter": 400,
+    "learning_rate": 0.05,
+    "max_leaf_nodes": 31,
+    "l2_regularization": 1.0,
+    "min_samples_leaf": 40,
+    "early_stopping": false,
+    "random_state": 42
+  },
+  "calibration": "isotonic regression fitted on the calibration window, sample weighted",
+  "split": {
+    "train_until": "2026-01-01",
+    "calibration": [
+      "2026-01-01",
+      "2026-04-01"
+    ],
+    "test": [
+      "2026-04-01",
+      "2026-05-31"
+    ],
+    "rows": {
+      "train": 1280976,
+      "calibration": 334379,
+      "test": 240847
+    }
+  },
+  "holdout": {
+    "rows": 240847,
+    "positives": 27705,
+    "represented_drive_days": 21341905,
+    "true_base_rate": 0.001298,
+    "average_precision": 0.1228,
+    "roc_auc": 0.8866,
+    "brier": 0.001183,
+    "ece": 0.000173,
+    "at_thresholds": [
+      {
+        "threshold": 0.02,
+        "precision": 0.0879,
+        "recall": 0.5134,
+        "flagged_per_10k_drive_days": 75.78
+      },
+      {
+        "threshold": 0.05,
+        "precision": 0.1414,
+        "recall": 0.4338,
+        "flagged_per_10k_drive_days": 39.84
+      },
+      {
+        "threshold": 0.1,
+        "precision": 0.1962,
+        "recall": 0.3604,
+        "flagged_per_10k_drive_days": 23.84
+      },
+      {
+        "threshold": 0.2,
+        "precision": 0.2822,
+        "recall": 0.227,
+        "flagged_per_10k_drive_days": 10.44
+      },
+      {
+        "threshold": 0.3,
+        "precision": 0.2811,
+        "recall": 0.2103,
+        "flagged_per_10k_drive_days": 9.71
+      },
+      {
+        "threshold": 0.5,
+        "precision": null,
+        "recall": 0.0,
+        "flagged_per_10k_drive_days": 0.0
+      }
+    ]
+  },
+  "uncalibrated_brier": 0.002024,
+  "calibration_table": [
+    {
+      "predicted": 0.00021,
+      "observed": 0.00028,
+      "rows": 89101
+    },
+    {
+      "predicted": 0.00024,
+      "observed": 0.00016,
+      "rows": 47516
+    },
+    {
+      "predicted": 0.00033,
+      "observed": 0.00035,
+      "rows": 44914
+    },
+    {
+      "predicted": 0.00111,
+      "observed": 0.00153,
+      "rows": 33973
+    },
+    {
+      "predicted": 0.02845,
+      "observed": 0.02649,
+      "rows": 25343
+    }
+  ],
+  "by_maker": {
+    "seagate": {
+      "rows": 79130,
+      "positives": 10192,
+      "represented_drive_days": 6903992,
+      "true_base_rate": 0.001476,
+      "average_precision": 0.1195,
+      "roc_auc": 0.8908,
+      "brier": 0.001361,
+      "ece": 0.000499,
+      "at_thresholds": [
+        {
+          "threshold": 0.02,
+          "precision": 0.0993,
+          "recall": 0.5245,
+          "flagged_per_10k_drive_days": 77.99
+        },
+        {
+          "threshold": 0.05,
+          "precision": 0.1402,
+          "recall": 0.4878,
+          "flagged_per_10k_drive_days": 51.38
+        },
+        {
+          "threshold": 0.1,
+          "precision": 0.1854,
+          "recall": 0.4466,
+          "flagged_per_10k_drive_days": 35.56
+        },
+        {
+          "threshold": 0.2,
+          "precision": 0.2295,
+          "recall": 0.3508,
+          "flagged_per_10k_drive_days": 22.56
+        },
+        {
+          "threshold": 0.3,
+          "precision": 0.2308,
+          "recall": 0.3356,
+          "flagged_per_10k_drive_days": 21.47
+        },
+        {
+          "threshold": 0.5,
+          "precision": null,
+          "recall": 0.0,
+          "flagged_per_10k_drive_days": 0.0
+        }
+      ]
+    },
+    "wdc": {
+      "rows": 58199,
+      "positives": 4149,
+      "represented_drive_days": 5409149,
+      "true_base_rate": 0.000767,
+      "average_precision": 0.0787,
+      "roc_auc": 0.8479,
+      "brier": 0.000726,
+      "ece": 9.1e-05,
+      "at_thresholds": [
+        {
+          "threshold": 0.02,
+          "precision": 0.0644,
+          "recall": 0.3601,
+          "flagged_per_10k_drive_days": 42.88
+        },
+        {
+          "threshold": 0.05,
+          "precision": 0.1085,
+          "recall": 0.2668,
+          "flagged_per_10k_drive_days": 18.87
+        },
+        {
+          "threshold": 0.1,
+          "precision": 0.187,
+          "recall": 0.2107,
+          "flagged_per_10k_drive_days": 8.64
+        },
+        {
+          "threshold": 0.2,
+          "precision": 0.3092,
+          "recall": 0.0863,
+          "flagged_per_10k_drive_days": 2.14
+        },
+        {
+          "threshold": 0.3,
+          "precision": 0.3341,
+          "recall": 0.0725,
+          "flagged_per_10k_drive_days": 1.67
+        },
+        {
+          "threshold": 0.5,
+          "precision": null,
+          "recall": 0.0,
+          "flagged_per_10k_drive_days": 0.0
+        }
+      ]
+    },
+    "hgst": {
+      "rows": 20505,
+      "positives": 5005,
+      "represented_drive_days": 1555005,
+      "true_base_rate": 0.003219,
+      "average_precision": 0.1605,
+      "roc_auc": 0.951,
+      "brier": 0.002879,
+      "ece": 0.000798,
+      "at_thresholds": [
+        {
+          "threshold": 0.02,
+          "precision": 0.0919,
+          "recall": 0.6735,
+          "flagged_per_10k_drive_days": 235.83
+        },
+        {
+          "threshold": 0.05,
+          "precision": 0.1386,
+          "recall": 0.5079,
+          "flagged_per_10k_drive_days": 117.95
+        },
+        {
+          "threshold": 0.1,
+          "precision": 0.1667,
+          "recall": 0.3638,
+          "flagged_per_10k_drive_days": 70.23
+        },
+        {
+          "threshold": 0.2,
+          "precision": 0.4562,
+          "recall": 0.1341,
+          "flagged_per_10k_drive_days": 9.46
+        },
+        {
+          "threshold": 0.3,
+          "precision": 0.4614,
+          "recall": 0.1027,
+          "flagged_per_10k_drive_days": 7.16
+        },
+        {
+          "threshold": 0.5,
+          "precision": null,
+          "recall": 0.0,
+          "flagged_per_10k_drive_days": 0.0
+        }
+      ]
+    },
+    "toshiba": {
+      "rows": 82342,
+      "positives": 8359,
+      "represented_drive_days": 7406659,
+      "true_base_rate": 0.001129,
+      "average_precision": 0.1557,
+      "roc_auc": 0.853,
+      "brier": 0.001004,
+      "ece": 0.000122,
+      "at_thresholds": [
+        {
+          "threshold": 0.02,
+          "precision": 0.0841,
+          "recall": 0.48,
+          "flagged_per_10k_drive_days": 64.42
+        },
+        {
+          "threshold": 0.05,
+          "precision": 0.1634,
+          "recall": 0.4065,
+          "flagged_per_10k_drive_days": 28.08
+        },
+        {
+          "threshold": 0.1,
+          "precision": 0.2599,
+          "recall": 0.3277,
+          "flagged_per_10k_drive_days": 14.23
+        },
+        {
+          "threshold": 0.2,
+          "precision": 0.4337,
+          "recall": 0.2016,
+          "flagged_per_10k_drive_days": 5.25
+        },
+        {
+          "threshold": 0.3,
+          "precision": 0.4309,
+          "recall": 0.1902,
+          "flagged_per_10k_drive_days": 4.98
+        },
+        {
+          "threshold": 0.5,
+          "precision": null,
+          "recall": 0.0,
+          "flagged_per_10k_drive_days": 0.0
+        }
+      ]
+    }
+  },
+  "thresholds": {
+    "high": 0.3,
+    "medium": 0.1
+  },
+  "fit_seconds": 18.1,
+  "promotion": {
+    "at": "20261103T115608Z",
+    "model": "drive_health",
+    "metric": "holdout weighted average precision",
+    "candidate": 0.1228,
+    "incumbent": null,
+    "tolerance": 0.01,
+    "higher_is_better": true,
+    "decision": "promoted",
+    "archived": "/Users/darthiedarte/development/oblvn/ml/models/global/history/drive_health-20261103T115608Z.joblib"
+  },
+  "name": "drive_health",
+  "scope": "global",
+  "trained_at": "2026-11-03T11:56:08.970786+00:00"
+}

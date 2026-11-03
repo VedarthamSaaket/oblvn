@@ -1,0 +1,21 @@
+{
+  "quarters":[
+    "Q1_2025",
+    "Q2_2025",
+    "Q3_2025",
+    "Q4_2025",
+    "Q1_2026",
+    "Q2_2026"
+  ],
+  "negative_rate":0.01,
+  "seed":42,
+  "files":546,
+  "first_day":"2025-01-01",
+  "last_day":"2026-06-30",
+  "censor_from":"2026-05-31",
+  "failed_drives":6861,
+  "rows":1860653,
+  "positive_rows":186186,
+  "drives":352168,
+  "seconds":583.0
+}
