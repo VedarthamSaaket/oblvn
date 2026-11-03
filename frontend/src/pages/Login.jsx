@@ -3,8 +3,10 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useToast } from '../components/Toast'
 import ArtworkPanel from '../components/ArtworkPanel'
+import GoogleButton from '../components/GoogleButton'
+import { firebaseConfigured } from '../lib/firebase'
 
-function Field({ label, type = 'text', value, onChange, required, autoFocus, rightSlot }) {
+export function Field({ label, type = 'text', value, onChange, required, autoFocus, rightSlot }) {
   const [focused, setFocused] = useState(false)
   return (
     <div style={{ marginBottom: 22 }}>
@@ -39,7 +41,7 @@ function Field({ label, type = 'text', value, onChange, required, autoFocus, rig
   )
 }
 
-function EyeBtn({ show, onToggle }) {
+export function EyeBtn({ show, onToggle }) {
   return (
     <button type="button" onClick={onToggle} style={{
       background: 'none', border: 'none', cursor: 'crosshair',
@@ -62,7 +64,7 @@ function EyeBtn({ show, onToggle }) {
   )
 }
 
-function SubmitBtn({ loading, children }) {
+export function SubmitBtn({ loading, children }) {
   return (
     <button type="submit" disabled={loading} style={{
       width: '100%', marginTop: 8, fontFamily: 'var(--mono)', fontSize: 9,
@@ -80,7 +82,7 @@ function SubmitBtn({ loading, children }) {
   )
 }
 
-function GhostBtn({ onClick, children }) {
+export function GhostBtn({ onClick, children }) {
   return (
     <button type="button" onClick={onClick} style={{
       fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.18em',
@@ -117,7 +119,7 @@ function ResetSentScreen({ email, onBack }) {
 }
 
 export default function Login() {
-  const { login, resetPassword, user, loading } = useAuth()
+  const { login, loginWithGoogle, completeMfa, resetPassword, user, loading } = useAuth()
   const toast = useToast()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -128,6 +130,9 @@ export default function Login() {
   const [submitting, setSubmitting] = useState(false)
   const [mode, setMode] = useState('login')
   const [resetSent, setResetSent] = useState(false)
+  const [mfaToken, setMfaToken] = useState('')
+  const [mfaCode, setMfaCode] = useState('')
+  const [googleBusy, setGoogleBusy] = useState(false)
 
   const invitedEmail = searchParams.get('email') || ''
   const isInvite = !!searchParams.get('invite') || !!invitedEmail
@@ -140,6 +145,54 @@ export default function Login() {
     if (invitedEmail) setEmail(invitedEmail)
   }, [invitedEmail])
 
+  useEffect(() => {
+    const verified = searchParams.get('verified')
+    if (verified === '1') toast('Email confirmed. You can sign in now.', 'success')
+    if (verified === '0') toast('That confirmation link is invalid or has expired.', 'error')
+  }, [searchParams])
+
+  function afterSignIn(data) {
+    if (data?.mfa_required) {
+      setMfaToken(data.mfa_token)
+      setMfaCode('')
+      setMode('mfa')
+      return
+    }
+    navigate('/dashboard', { replace: true })
+  }
+
+  async function handleGoogle() {
+    setGoogleBusy(true)
+    try {
+      afterSignIn(await loginWithGoogle())
+    } catch (err) {
+      const msg = err?.message || ''
+      if (!msg.includes('popup-closed') && !msg.includes('cancelled-popup')) {
+        toast(msg.includes('Firebase') ? 'Google sign-in failed. Try again.' : (msg || 'Google sign-in failed.'), 'error')
+      }
+    } finally {
+      setGoogleBusy(false)
+    }
+  }
+
+  async function handleMfa(e) {
+    e.preventDefault()
+    setSubmitting(true)
+    try {
+      afterSignIn(await completeMfa(mfaToken, mfaCode.trim()))
+    } catch (err) {
+      const msg = err?.message || ''
+      if (msg.includes('expired')) {
+        toast('Two-factor step expired. Sign in again.', 'error')
+        setMode('login')
+      } else {
+        toast('Invalid two-factor code.', 'error')
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   function switchToReset() { setMode('reset'); setPassword('') }
   function switchToLogin() { setMode('login'); setResetSent(false) }
 
@@ -147,11 +200,12 @@ export default function Login() {
     e.preventDefault()
     setSubmitting(true)
     try {
-      await login(email, password)
-      navigate('/dashboard', { replace: true })
+      afterSignIn(await login(email, password))
     } catch (err) {
       const msg = err?.message || ''
-      if (msg.includes('Invalid login') || msg.includes('invalid_credentials')) {
+      if (msg.includes('Too many failed')) {
+        toast(msg, 'error')
+      } else if (msg.includes('Invalid login') || msg.includes('invalid_credentials')) {
         toast('Incorrect email or password.', 'error')
       } else if (msg.includes('confirm') || msg.includes('not confirmed')) {
         toast('Please confirm your email before signing in.', 'error')
@@ -205,7 +259,7 @@ export default function Login() {
             )}
 
             <div style={{ fontFamily: 'var(--mono)', fontSize: 7, letterSpacing: '0.28em', textTransform: 'uppercase', color: 'rgba(240,235,224,0.2)', marginBottom: 28, display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span>{mode === 'reset' ? 'Reset Password' : 'Sign In'}</span>
+              <span>{mode === 'reset' ? 'Reset Password' : mode === 'mfa' ? 'Two-Factor Check' : 'Sign In'}</span>
               <div style={{ flex: 1, height: 1, background: 'rgba(240,235,224,0.07)' }} />
             </div>
 
@@ -226,6 +280,23 @@ export default function Login() {
                   <SubmitBtn loading={submitting}>
                     {submitting ? 'Signing in…' : isInvite ? 'Sign In & Join Org →' : 'Sign In →'}
                   </SubmitBtn>
+                  {firebaseConfigured && <GoogleButton onClick={handleGoogle} loading={googleBusy} />}
+                </form>
+              )}
+
+              {mode === 'mfa' && (
+                <form onSubmit={handleMfa}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.06em', color: 'rgba(240,235,224,0.35)', lineHeight: 1.85, marginBottom: 24 }}>
+                    Enter the 6-digit code from your authenticator app, or one of your recovery codes.
+                  </div>
+                  <Field label="Authentication Code" value={mfaCode}
+                    onChange={e => setMfaCode(e.target.value)} required autoFocus />
+                  <SubmitBtn loading={submitting}>
+                    {submitting ? 'Verifying…' : 'Verify →'}
+                  </SubmitBtn>
+                  <div style={{ marginTop: 20 }}>
+                    <GhostBtn onClick={switchToLogin}>← Back to Sign In</GhostBtn>
+                  </div>
                 </form>
               )}
 

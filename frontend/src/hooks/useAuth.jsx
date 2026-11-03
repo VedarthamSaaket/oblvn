@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useReducer, useRef, useCallback } from 'react'
 import { api } from '../lib/api'
+import { signInWithGoogle } from '../lib/firebase'
 
 const AuthCtx = createContext(null)
 
@@ -88,17 +89,24 @@ export function AuthProvider({ children }) {
         init()
     }, [])
 
-    async function login(email, password) {
-        const data = await api.auth.login(email, password)
-
-        if (data.access_token) localStorage.setItem('oblvn_token', data.access_token)
-        if (data.refresh_token) localStorage.setItem('oblvn_refresh', data.refresh_token)
-        if (data.user) localStorage.setItem('oblvn_user', JSON.stringify(data.user))
-
+    function finish(data) {
+        if (data.mfa_required) return data
         dispatch({ type: 'SET_USER', user: data.user || { id: 'authenticated' } })
         scheduleRefresh()
-
         return data
+    }
+
+    async function login(email, password) {
+        return finish(await api.auth.login(email, password))
+    }
+
+    async function loginWithGoogle() {
+        const idToken = await signInWithGoogle()
+        return finish(await api.auth.firebase(idToken))
+    }
+
+    async function completeMfa(mfaToken, code) {
+        return finish(await api.auth.mfaLogin(mfaToken, code))
     }
 
     async function register(email, password) {
@@ -115,7 +123,7 @@ export function AuthProvider({ children }) {
     }
 
     return (
-        <AuthCtx.Provider value={{ user, loading, login, register, logout, resetPassword }}>
+        <AuthCtx.Provider value={{ user, loading, login, loginWithGoogle, completeMfa, register, logout, resetPassword }}>
             {children}
         </AuthCtx.Provider>
     )

@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useToast } from '../components/Toast'
 import ArtworkPanel from '../components/ArtworkPanel'
+import GoogleButton from '../components/GoogleButton'
+import { firebaseConfigured } from '../lib/firebase'
 
 function getStrength(pw) {
     if (!pw) return { score: 0, label: '', color: 'transparent' }
@@ -153,7 +155,7 @@ function ConfirmScreen({ email }) {
 }
 
 export default function Register() {
-    const { register, login } = useAuth()
+    const { register, login, loginWithGoogle } = useAuth()
     const toast = useToast()
     const navigate = useNavigate()
     const [searchParams] = useSearchParams()
@@ -163,6 +165,27 @@ export default function Register() {
     const [showPw, setShowPw] = useState(false)
     const [loading, setLoading] = useState(false)
     const [confirmed, setConfirmed] = useState(false)
+    const [googleBusy, setGoogleBusy] = useState(false)
+
+    async function handleGoogle() {
+        setGoogleBusy(true)
+        try {
+            const data = await loginWithGoogle()
+            if (data?.mfa_required) {
+                navigate('/login')
+                return
+            }
+            toast(data?.is_new ? 'Account created. Welcome.' : 'Signed in with Google.', 'success')
+            navigate('/dashboard')
+        } catch (err) {
+            const msg = err?.message || ''
+            if (!msg.includes('popup-closed') && !msg.includes('cancelled-popup')) {
+                toast(msg || 'Google sign-in failed.', 'error')
+            }
+        } finally {
+            setGoogleBusy(false)
+        }
+    }
 
     const invitedEmail = searchParams.get('email') || ''
     const isInvite = !!invitedEmail
@@ -263,6 +286,7 @@ export default function Register() {
                                 ? 'Creating account…'
                                 : isInvite ? 'Create Account & Join Org →' : 'Create Account →'}
                         </SubmitBtn>
+                        {firebaseConfigured && <GoogleButton onClick={handleGoogle} loading={googleBusy} />}
                     </form>
 
                     <div style={{ margin: '28px 0', display: 'flex', alignItems: 'center', gap: 12 }}>

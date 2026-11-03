@@ -1,3 +1,5 @@
+import { signOutOfFirebase } from './firebase'
+
 const BASE = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
 function token() {
@@ -91,6 +93,24 @@ async function req(method, path, body, isRetry = false, responseType = 'json') {
   try { return JSON.parse(text) } catch { return {} }
 }
 
+async function publicPost(path, body) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`)
+  return data
+}
+
+function storeSession(data) {
+  if (data.access_token) localStorage.setItem('oblvn_token', data.access_token)
+  if (data.refresh_token) localStorage.setItem('oblvn_refresh', data.refresh_token)
+  if (data.user) localStorage.setItem('oblvn_user', JSON.stringify(data.user))
+  return data
+}
+
 const buildQuery = (params) => {
   const cleanParams = Object.fromEntries(
     Object.entries(params).filter(([_, v]) => v != null)
@@ -120,26 +140,26 @@ export const api = {
     register: (email, password) =>
       req('POST', '/auth/register', { email, password }),
 
-    login: async (email, password) => {
-      const res = await fetch(`${BASE}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      })
+    login: (email, password) => publicPost('/auth/login', { email, password }).then(storeSession),
 
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`)
+    firebase: (idToken) => publicPost('/auth/firebase', { id_token: idToken }).then(storeSession),
 
-      if (data.access_token) localStorage.setItem('oblvn_token', data.access_token)
-      if (data.refresh_token) localStorage.setItem('oblvn_refresh', data.refresh_token)
-      if (data.user) localStorage.setItem('oblvn_user', JSON.stringify(data.user))
+    mfaLogin: (mfaToken, code) => publicPost('/auth/2fa/login', { mfa_token: mfaToken, code }).then(storeSession),
 
-      return data
-    },
+    updatePassword: (resetToken, password, invite = false) =>
+      publicPost('/auth/password/update', { token: resetToken, password, invite }),
+
+    resendVerification: (email) => publicPost('/auth/verify-email/resend', { email }),
+
+    me: () => req('GET', '/auth/me'),
+    mfaSetup: () => req('POST', '/auth/2fa/setup'),
+    mfaEnable: (code) => req('POST', '/auth/2fa/enable', { code }),
+    mfaDisable: (code) => req('POST', '/auth/2fa/disable', { code }),
 
     logout: () => {
       const promise = req('POST', '/auth/logout').catch(() => { })
       clearSession()
+      signOutOfFirebase().catch(() => { })
       return promise
     },
 
