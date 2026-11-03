@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useToast } from '../components/Toast'
 import SectionRule from '../components/SectionRule'
@@ -24,6 +25,83 @@ function Toggle({ value, onChange, label }) {
       </div>
       {label && <span style={{ fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.1em', color: value ? 'rgba(240,235,224,0.7)' : 'rgba(240,235,224,0.3)', transition: 'color 0.2s' }}>{label}</span>}
     </label>
+  )
+}
+
+function TwoFactorRow() {
+  const toast = useToast()
+  const [enabled, setEnabled] = useState(false)
+  const [stage, setStage] = useState('idle')
+  const [setup, setSetup] = useState(null)
+  const [code, setCode] = useState('')
+  const [recovery, setRecovery] = useState([])
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.auth.me().then(me => setEnabled(!!me?.mfa_enabled)).catch(() => { })
+  }, [])
+
+  async function onToggle(next) {
+    setCode('')
+    setRecovery([])
+    if (next) {
+      try {
+        setSetup(await api.auth.mfaSetup())
+        setStage('enrol')
+      } catch (err) { toast(err.message, 'error') }
+    } else {
+      setStage('disable')
+    }
+  }
+
+  async function confirm() {
+    setBusy(true)
+    try {
+      if (stage === 'enrol') {
+        const r = await api.auth.mfaEnable(code.trim())
+        setRecovery(r.recovery_codes || [])
+        setEnabled(true)
+        setStage('codes')
+        toast('Two-factor authentication enabled', 'success')
+      } else {
+        await api.auth.mfaDisable(code.trim())
+        setEnabled(false)
+        setStage('idle')
+        toast('Two-factor authentication disabled', 'success')
+      }
+    } catch (err) { toast(err.message, 'error') } finally { setBusy(false) }
+  }
+
+  const mono = { fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.08em', color: 'rgba(240,235,224,0.45)', lineHeight: 1.8 }
+  return (
+    <SettingRow label="Two-Factor Authentication" description="Require a code from an authenticator app on every sign in, including Google sign-in.">
+      <div style={{ width: '100%' }}>
+        <Toggle value={enabled || stage === 'enrol'} onChange={onToggle} label={enabled ? 'Enabled' : stage === 'enrol' ? 'Setting up' : 'Disabled'} />
+        {stage === 'enrol' && setup && (
+          <div style={{ marginTop: 18 }}>
+            <img src={`data:image/png;base64,${setup.qr_png_base64}`} alt="Authenticator QR code" style={{ width: 132, height: 132, background: 'var(--cream)', padding: 6, display: 'block', marginBottom: 12 }} />
+            <div style={{ ...mono, marginBottom: 12, wordBreak: 'break-all' }}>Scan with your authenticator app, or enter this key: {setup.secret}</div>
+          </div>
+        )}
+        {(stage === 'enrol' || stage === 'disable') && (
+          <div style={{ display: 'flex', gap: 10, marginTop: stage === 'disable' ? 18 : 0 }}>
+            <input value={code} onChange={e => setCode(e.target.value)} placeholder={stage === 'enrol' ? '6-digit code' : 'Code or recovery code'}
+              style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--cream)', background: 'rgba(240,235,224,0.04)', border: '1px solid rgba(240,235,224,0.12)', padding: '10px 14px', outline: 'none', flex: 1, cursor: 'crosshair' }} />
+            <button onClick={confirm} disabled={busy || !code.trim()} style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--ink)', background: 'var(--cream)', border: 'none', padding: '10px 18px', cursor: 'crosshair', boxShadow: '2px 2px 0 var(--sage)', opacity: busy || !code.trim() ? 0.5 : 1 }}>
+              {stage === 'enrol' ? 'Confirm' : 'Disable'}
+            </button>
+          </div>
+        )}
+        {stage === 'codes' && recovery.length > 0 && (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ ...mono, marginBottom: 8 }}>Save these recovery codes now. Each works once, and they will not be shown again.</div>
+            <div style={{ background: 'rgba(74,84,66,0.2)', padding: '10px 12px', fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--cream)', lineHeight: 1.9, columns: 2 }}>
+              {recovery.map(c => <div key={c}>{c}</div>)}
+            </div>
+          </div>
+        )}
+      </div>
+    </SettingRow>
   )
 }
 
@@ -94,10 +172,10 @@ export default function Settings() {
         <SaveBtn section="Notification" />
 
         <SectionHeading label="Security" />
-        <SettingRow label="Two-Factor Authentication" description="Require TOTP verification on every login. Managed via Supabase MFA."><Toggle value={security.twoFactor} onChange={v => setSecurity(p => ({ ...p, twoFactor: v }))} label={security.twoFactor ? 'Enabled' : 'Disabled'} /></SettingRow>
+        <TwoFactorRow />
         <SettingRow label="Require Approval Gate" description="All wipe jobs created by operators must be approved by a Team Lead before executing."><Toggle value={security.requireApproval} onChange={v => setSecurity(p => ({ ...p, requireApproval: v }))} label={security.requireApproval ? 'Enabled' : 'Disabled'} /></SettingRow>
         <SettingRow label="Audit Everything" description="Log all read events, not just write events."><Toggle value={security.auditEverything} onChange={v => setSecurity(p => ({ ...p, auditEverything: v }))} label={security.auditEverything ? 'On' : 'Off'} /></SettingRow>
-        <SettingRow label="IP Restriction" description="Restrict access to a whitelist of IP addresses. Configure via Supabase Auth settings."><Toggle value={security.ipRestriction} onChange={v => setSecurity(p => ({ ...p, ipRestriction: v }))} label={security.ipRestriction ? 'On' : 'Off'} /></SettingRow>
+        <SettingRow label="IP Restriction" description="Restrict access to a whitelist of IP addresses."><Toggle value={security.ipRestriction} onChange={v => setSecurity(p => ({ ...p, ipRestriction: v }))} label={security.ipRestriction ? 'On' : 'Off'} /></SettingRow>
         <SettingRow label="Auto Logout" description="Automatically sign out after a period of inactivity.">
           <SelectInput value={security.autoLogout} onChange={v => setSecurity(p => ({ ...p, autoLogout: v }))} options={[{ value: '15', label: '15 minutes' }, { value: '30', label: '30 minutes' }, { value: '60', label: '1 hour' }, { value: '240', label: '4 hours' }, { value: 'never', label: 'Never' }]} />
         </SettingRow>
