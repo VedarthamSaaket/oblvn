@@ -21,10 +21,24 @@ export default function Anomalies() {
   async function acknowledge(id, resolved) {
     try {
       await api.anomalies.acknowledge(id, { note: ackNote[id] || '', resolved })
-      setAnomalies(prev => prev.filter(a => a.id !== id))
+      setAnomalies(prev => filter === 'open' ? prev.filter(a => a.id !== id) : prev.map(a => a.id === id ? { ...a, status: resolved ? 'resolved' : 'acknowledged' } : a))
       toast(resolved ? 'Anomaly resolved' : 'Anomaly acknowledged', 'success')
     } catch (err) { toast(err.message, 'error') }
   }
+
+  async function label(a, feedback) {
+    try {
+      const updated = await api.anomalies.acknowledge(a.id, {
+        note: ackNote[a.id] || '',
+        resolved: a.status === 'resolved',
+        feedback,
+      })
+      setAnomalies(prev => prev.map(x => x.id === a.id ? { ...x, ...updated, feedback } : x))
+      toast(feedback === 'true_positive' ? 'Marked as a real threat' : 'Marked as a false alarm', 'success')
+    } catch (err) { toast(err.message, 'error') }
+  }
+
+  const feedbackLabels = { true_positive: 'Real threat', false_positive: 'False alarm' }
 
   const severityColours = {
     critical: '#c44a42', high: 'rgba(196,144,26,0.9)',
@@ -72,7 +86,14 @@ export default function Anomalies() {
                     <BtnGhost onClick={() => acknowledge(a.id, true)}>Resolve</BtnGhost>
                   </div>
                 )}
-                {a.status !== 'open' && <div style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.14em', color: 'rgba(240,235,224,0.3)', textTransform: 'uppercase' }}>{a.status}</div>}
+                {a.status !== 'open' && <div style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.14em', color: 'rgba(240,235,224,0.3)', textTransform: 'uppercase' }}>{a.status}{a.feedback ? ` · ${feedbackLabels[a.feedback]}` : ''}</div>}
+                {!a.feedback && (
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(240,235,224,0.06)' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.14em', color: 'rgba(240,235,224,0.3)', textTransform: 'uppercase', flex: 1 }}>Was this a real threat?</span>
+                    <BtnGhost onClick={() => label(a, 'true_positive')}>Real threat</BtnGhost>
+                    <BtnGhost onClick={() => label(a, 'false_positive')}>False alarm</BtnGhost>
+                  </div>
+                )}
               </div>
             ))}
           </div>
