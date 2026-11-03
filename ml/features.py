@@ -29,7 +29,13 @@ LOGIN_FEATURES = [
 ]
 
 SMART_IDS = [1, 3, 4, 5, 7, 9, 10, 12, 187, 188, 189, 190, 192, 193, 194, 196, 197, 198, 199, 240, 241, 242]
-SMART_FEATURES = [f"smart_{i}_raw" for i in SMART_IDS] + ["log2_capacity_gib"]
+TREND_IDS = [5, 187, 188, 197, 198, 199]
+TREND_LAGS = [7, 30]
+MAKERS = ["seagate", "wdc", "hgst", "toshiba", "other"]
+BASE_SMART_FEATURES = [f"smart_{i}_raw" for i in SMART_IDS] + ["log2_capacity_gib"]
+TREND_FEATURES = [f"smart_{i}_delta_{lag}d" for lag in TREND_LAGS for i in TREND_IDS]
+MAKER_FEATURES = [f"maker_{m}" for m in MAKERS]
+SMART_FEATURES = BASE_SMART_FEATURES + TREND_FEATURES + MAKER_FEATURES
 
 
 def ts(value) -> datetime | None:
@@ -163,15 +169,56 @@ def login_row(at: datetime, ip: str | None, prior: list[dict], failed_before: in
     }
 
 
-def smart_row(snapshot: dict, capacity_bytes: int | None = None) -> dict:
+def manufacturer(model: str | None) -> str:
+    m = (model or "").strip().upper()
+    if m.startswith(("ST", "SEAGATE")):
+        return "seagate"
+    if m.startswith("HGST") or m.startswith("HITACHI"):
+        return "hgst"
+    if m.startswith(("WDC", "WD", "WUH", "WUS", "WESTERN")):
+        return "wdc"
+    if m.startswith(("TOSHIBA", "MG0", "MD0", "HDWF", "HDWG")):
+        return "toshiba"
+    return "other"
+
+
+def smart_raw(snapshot: dict) -> dict[int, float]:
     raw = {}
     for a in snapshot.get("attributes") or []:
         try:
             raw[int(a["id"])] = float(str(a.get("raw", "")).split()[0])
         except (ValueError, IndexError, KeyError, TypeError):
             continue
+    return raw
+
+
+def _past(history: list[dict], now: datetime, lag: int) -> dict[int, float] | None:
+    target = now - timedelta(days=lag)
+    best = None
+    for h in history or []:
+        at = ts(h.get("captured_at"))
+        if not at or at > now - timedelta(days=lag * 0.5):
+            continue
+        if best is None or abs((at - target).total_seconds()) < abs((ts(best["captured_at"]) - target).total_seconds()):
+            best = h
+    if not best or abs((ts(best["captured_at"]) - target).days) > max(2, lag // 4):
+        return None
+    return smart_raw(best.get("snapshot") or {})
+
+
+def smart_row(snapshot: dict, capacity_bytes: int | None = None, history: list[dict] | None = None,
+              now: datetime | None = None) -> dict:
+    raw = smart_raw(snapshot)
     row = {f"smart_{i}_raw": raw.get(i, math.nan) for i in SMART_IDS}
     row["log2_capacity_gib"] = log2_gib(capacity_bytes) if capacity_bytes else math.nan
+    now = now or datetime.now().astimezone()
+    for lag in TREND_LAGS:
+        past = _past(history or [], now, lag)
+        for i in TREND_IDS:
+            row[f"smart_{i}_delta_{lag}d"] = (raw[i] - past[i]) if past and i in raw and i in past else math.nan
+    maker = manufacturer(snapshot.get("model"))
+    for m in MAKERS:
+        row[f"maker_{m}"] = 1.0 if maker == m else 0.0
     return row
 
 
