@@ -44,7 +44,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from backend import jobs, realtime
+from backend import jobs, local_ops, realtime
 from backend.accounts import service as accounts_service
 from backend.accounts.service import AuthError
 from backend.db import DuplicateKey, get_user_client
@@ -476,6 +476,8 @@ async def list_devices(request: Request, org_id: Optional[str] = Query(None)):
         org_id = None
 
     remote = agent_devices(user["user_id"], org_id)
+    if not local_ops.allowed(request):
+        return {"devices": remote}
     try:
         devices = detect_devices()
     except DeviceDetectionError as exc:
@@ -497,6 +499,7 @@ async def list_devices(request: Request, org_id: Optional[str] = Query(None)):
 @limiter.limit("30 per minute")
 async def refresh_devices_get(request: Request):
     current_user(request)
+    local_ops.require(request)
     try:
         return {"devices": detect_devices()}
     except DeviceDetectionError as exc:
@@ -507,6 +510,7 @@ async def refresh_devices_get(request: Request):
 @limiter.limit("30 per minute")
 async def refresh_devices(request: Request):
     current_user(request)
+    local_ops.require(request)
     try:
         return {"devices": detect_devices()}
     except DeviceDetectionError as exc:
@@ -518,7 +522,8 @@ async def refresh_devices(request: Request):
 async def get_device(serial: str, request: Request):
     user = current_user(request)
     try:
-        d = get_device_by_serial(serial) or find_agent_device(serial, user["user_id"], None)
+        d = (get_device_by_serial(serial) if local_ops.allowed(request) else None) \
+            or find_agent_device(serial, user["user_id"], None)
         if not d:
             raise HTTPException(status_code=404, detail="Device not found")
         return d
@@ -534,6 +539,7 @@ async def get_device(serial: str, request: Request):
 async def select_local_files(request: Request):
     """Open a native multi-file dialog. Returns selected files as sources."""
     current_user(request)
+    local_ops.require(request)
 
     def _pick(root, result: dict):
         import tkinter as tk
@@ -578,6 +584,7 @@ async def select_local_folder(request: Request):
     All files from all chosen folders are returned as sources.
     """
     current_user(request)
+    local_ops.require(request)
 
     def _pick(root, result: dict):
         import tkinter as tk
@@ -663,6 +670,7 @@ async def select_items(request: Request):
     The frontend now uses select-files / select-folder instead.
     """
     current_user(request)
+    local_ops.require(request)
 
     def _picker(root, result: dict):
         import tkinter as tk
@@ -969,6 +977,7 @@ async def create_job(request: Request):
     agent_id = None
 
     if target_serial.startswith("file:"):
+        local_ops.require(request)
         raw_paths = data.get("file_paths") or [target_serial.replace("file:", "", 1)]
         try:
             file_paths = [str(check_path(p)) for p in raw_paths]
@@ -992,10 +1001,12 @@ async def create_job(request: Request):
         }
     else:
         file_paths = []
-        try:
-            device = get_device_by_serial(target_serial)
-        except DeviceDetectionError:
-            device = None
+        device = None
+        if local_ops.allowed(request):
+            try:
+                device = get_device_by_serial(target_serial)
+            except DeviceDetectionError:
+                device = None
         if not device:
             device = find_agent_device(target_serial, user["user_id"], org_id, data.get("agent_id"))
             if device:

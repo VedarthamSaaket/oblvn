@@ -29,6 +29,7 @@ class Config:
     SMTP_SSL: bool = _bool("SMTP_SSL", False)
     REQUIRE_EMAIL_VERIFICATION: bool = _bool("OBLVN_REQUIRE_EMAIL_VERIFICATION", bool(os.environ.get("SMTP_HOST")))
     FIREBASE_PROJECT_ID: str = os.environ.get("FIREBASE_PROJECT_ID", "")
+    LOCAL_OPS: str = os.environ.get("OBLVN_LOCAL_OPS", "loopback").strip().lower()
     ENV: str = os.environ.get("FLASK_ENV", "development")
     DEBUG: bool = os.environ.get("FLASK_ENV", "development") == "development"
     DRY_RUN: bool = os.environ.get("OBLVN_DRY_RUN", "0") == "1"

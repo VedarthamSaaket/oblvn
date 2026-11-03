@@ -6,6 +6,7 @@ os.environ.setdefault("MONGODB_URI", "mongodb://unused-in-tests")
 os.environ.setdefault("OBLVN_JWT_SECRET", "test-jwt-secret-that-is-long-enough-1234567890")
 os.environ.setdefault("OBLVN_SECRET_KEY", "test-encryption-key-that-is-long-enough-123456")
 os.environ.setdefault("FLASK_ENV", "testing")
+os.environ.setdefault("OBLVN_LOCAL_OPS", "any")
 os.environ.setdefault("OBLVN_DATA_DIR", tempfile.mkdtemp(prefix="oblvn_data_"))
 os.environ.setdefault("OBLVN_ML_MODELS", tempfile.mkdtemp(prefix="oblvn_models_"))
 
