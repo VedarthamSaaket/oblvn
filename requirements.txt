@@ -47,3 +47,4 @@ maxminddb==2.6.2
 pymongo==4.10.1
 argon2-cffi==23.1.0
 mongomock==4.3.0
+google-auth==2.62.0

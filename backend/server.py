@@ -121,6 +121,9 @@ class RoleBody(BaseModel):
 class ApproveBody(BaseModel):
     org_id: Optional[str] = None
 
+class FirebaseBody(BaseModel):
+    id_token: str
+
 class MfaLoginBody(BaseModel):
     mfa_token: str
     code: str
@@ -327,6 +330,23 @@ async def login(request: Request, body: AuthBody):
     if result.get("mfa_required"):
         return {"mfa_required": True, "mfa_token": result["mfa_token"]}
     return _login_success(result, ip)
+
+
+@app.post("/api/auth/firebase")
+@limiter.limit(config.AUTH_RATE_LIMIT)
+async def login_firebase(request: Request, body: FirebaseBody):
+    ip = request.client.host if request.client else "unknown"
+    try:
+        result = await asyncio.to_thread(accounts_service.sign_in_firebase, body.id_token)
+    except AuthError as exc:
+        log_event("login_failed", {"ip_address": ip, "reason": exc.code, "provider": "google"}, user_id=None)
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    if result.get("is_new"):
+        log_event("user_registered", {"email": result["user"]["email"], "provider": "google"},
+                  user_id=result["user"]["id"])
+    if result.get("mfa_required"):
+        return {"mfa_required": True, "mfa_token": result["mfa_token"]}
+    return {**_login_success(result, ip), "is_new": result.get("is_new", False)}
 
 
 @app.post("/api/auth/2fa/login")

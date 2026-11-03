@@ -115,8 +115,11 @@ COLLECTIONS: dict[str, dict] = {
         "key": "id",
         "required": ["email", "password_hash"],
         "defaults": {"email_confirmed_at": None, "mfa_enabled": False, "mfa_secret": None, "recovery_codes": list,
-                     "failed_logins": 0, "locked_until": None, "created_at": _now, "last_sign_in_at": None},
-        "indexes": [IndexModel([("email", ASCENDING)], unique=True)],
+                     "failed_logins": 0, "locked_until": None, "created_at": _now, "last_sign_in_at": None,
+                     "providers": list},
+        "indexes": [IndexModel([("email", ASCENDING)], unique=True),
+                    IndexModel([("firebase_uid", ASCENDING)], unique=True,
+                               partialFilterExpression={"firebase_uid": {"$type": "string"}})],
     },
     "sessions": {
         "key": "id",

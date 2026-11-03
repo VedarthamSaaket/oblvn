@@ -209,3 +209,87 @@ def test_auth_http_flow(fake_db, outbox, monkeypatch):
         events = [e["event_type"] for e in fake_db.tables["audit_log"]]
         assert "user_registered" in events and "email_verified" in events and "login_failed" in events
         assert "refresh_token_reuse" in events
+
+
+def _claims(uid="fb-uid-1", email="g@b.io", verified=True, project="oblvn-test"):
+    return {"sub": uid, "email": email, "email_verified": verified, "name": "G User",
+            "iss": f"https://securetoken.google.com/{project}", "aud": project}
+
+
+@pytest.fixture
+def firebase(monkeypatch):
+    monkeypatch.setattr(config, "FIREBASE_PROJECT_ID", "oblvn-test")
+    state = {"claims": _claims()}
+
+    def fake_verify(token, request, audience):
+        assert audience == "oblvn-test"
+        if token != "good":
+            raise ValueError("bad token")
+        return state["claims"]
+    from google.oauth2 import id_token
+    monkeypatch.setattr(id_token, "verify_firebase_token", fake_verify)
+    return state
+
+
+def test_firebase_creates_account_and_session(fake_db, firebase):
+    r = service.sign_in_firebase("good")
+    assert r["is_new"] and decode_access(r["access_token"])["amr"] == ["google"]
+    user = fake_db.db.users.find_one({"email": "g@b.io"})
+    assert user["firebase_uid"] == "fb-uid-1" and user["email_confirmed_at"] and user["password_hash"].startswith("!")
+    again = service.sign_in_firebase("good")
+    assert not again["is_new"] and again["user"]["id"] == r["user"]["id"]
+    with pytest.raises(AuthError):
+        service.sign_in("g@b.io", "")
+
+
+def test_firebase_links_existing_password_account(fake_db, firebase, outbox, verified):
+    service.sign_up("g@b.io", PW)
+    r = service.sign_in_firebase("good")
+    assert not r["is_new"]
+    assert service.get_user(r["user"]["id"])["providers"] == ["password", "google"]
+    assert service.sign_in("g@b.io", PW)["access_token"]
+
+
+def test_firebase_rejections(fake_db, firebase, monkeypatch):
+    with pytest.raises(AuthError) as e:
+        service.sign_in_firebase("forged")
+    assert e.value.code == "firebase_invalid"
+    firebase["claims"] = _claims(verified=False)
+    with pytest.raises(AuthError):
+        service.sign_in_firebase("good")
+    firebase["claims"] = _claims(project="someone-else")
+    with pytest.raises(AuthError):
+        service.sign_in_firebase("good")
+    firebase["claims"] = _claims()
+    service.sign_in_firebase("good")
+    firebase["claims"] = _claims(uid="other-google-account")
+    with pytest.raises(AuthError) as e:
+        service.sign_in_firebase("good")
+    assert e.value.code == "firebase_conflict"
+    monkeypatch.setattr(config, "FIREBASE_PROJECT_ID", "")
+    with pytest.raises(AuthError) as e:
+        service.sign_in_firebase("good")
+    assert e.value.status == 503
+
+
+def test_firebase_respects_mfa(fake_db, firebase):
+    first = service.sign_in_firebase("good")
+    uid = first["user"]["id"]
+    secret = service.mfa_setup(uid)["secret"]
+    service.mfa_enable(uid, pyotp.TOTP(secret).now())
+    step = service.sign_in_firebase("good")
+    assert step["mfa_required"] and "access_token" not in step
+    session = service.sign_in_mfa(step["mfa_token"], pyotp.TOTP(secret).at(time.time() + 30))
+    assert decode_access(session["access_token"])["amr"] == ["google", "mfa"]
+
+
+def test_firebase_http_route(fake_db, firebase):
+    from fastapi.testclient import TestClient
+    from backend.server import app
+    with TestClient(app) as client:
+        ok = client.post("/api/auth/firebase", json={"id_token": "good"})
+        assert ok.status_code == 200 and ok.json()["is_new"] is True and ok.json()["access_token"]
+        assert client.post("/api/auth/firebase", json={"id_token": "forged"}).status_code == 401
+        events = [(e["event_type"], (e["event_payload"] if isinstance(e["event_payload"], str) else "")) for e in fake_db.tables["audit_log"]]
+        assert any(t == "user_registered" and "google" in p for t, p in events)
+        assert any(t == "login_success" for t, _ in events)

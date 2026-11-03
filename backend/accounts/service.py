@@ -31,7 +31,70 @@ def _users():
 def _public(user: dict) -> dict:
     return {"id": user["_id"], "email": user["email"], "email_confirmed_at": user.get("email_confirmed_at"),
             "mfa_enabled": bool(user.get("mfa_enabled")), "created_at": user.get("created_at"),
+            "providers": user.get("providers") or (["password"] if not str(user.get("password_hash", "")).startswith("!") else []),
             "last_sign_in_at": user.get("last_sign_in_at")}
+
+
+class _GoogleRequest:
+    instance = None
+
+    @classmethod
+    def get(cls):
+        if cls.instance is None:
+            from google.auth.transport import requests as google_requests
+            cls.instance = google_requests.Request()
+        return cls.instance
+
+
+def verify_firebase_token(id_token: str) -> dict:
+    from google.oauth2 import id_token as google_id_token
+    project = config.FIREBASE_PROJECT_ID
+    claims = google_id_token.verify_firebase_token(id_token, _GoogleRequest.get(), audience=project)
+    if not claims or claims.get("iss") != f"https://securetoken.google.com/{project}":
+        raise ValueError("wrong issuer")
+    if not claims.get("sub") or not claims.get("email"):
+        raise ValueError("token carries no account")
+    if not claims.get("email_verified"):
+        raise ValueError("email not verified")
+    return claims
+
+
+def sign_in_firebase(id_token: str) -> dict:
+    if not config.FIREBASE_PROJECT_ID:
+        raise AuthError(503, "Google sign-in is not configured", "firebase_not_configured")
+    try:
+        claims = verify_firebase_token(id_token)
+    except Exception:
+        raise AuthError(401, "Could not verify your Google sign-in", "firebase_invalid")
+    uid, email = claims["sub"], claims["email"].strip().lower()
+    users = _users()
+    user = users.find_one({"firebase_uid": uid})
+    is_new = False
+    if user is None:
+        user = users.find_one({"email": email})
+        if user is None:
+            row = get_service_client().table("users").insert({
+                "email": email, "password_hash": unusable(), "email_confirmed_at": _now().isoformat(),
+                "firebase_uid": uid, "providers": ["google"], "display_name": claims.get("name"),
+            }).execute().data[0]
+            user, is_new = users.find_one({"_id": row["id"]}), True
+        else:
+            if user.get("firebase_uid") and user["firebase_uid"] != uid:
+                raise AuthError(409, "This email is linked to a different Google account", "firebase_conflict")
+            updates = {"firebase_uid": uid}
+            if not user.get("email_confirmed_at"):
+                updates["email_confirmed_at"] = _now().isoformat()
+            users.update_one({"_id": user["_id"]}, {"$set": updates, "$addToSet": {"providers": "google"}})
+            user = users.find_one({"_id": user["_id"]})
+    locked = user.get("locked_until")
+    if locked and (locked if locked.tzinfo else locked.replace(tzinfo=timezone.utc)) > _now():
+        raise AuthError(423, "Too many failed attempts. Try again in a few minutes.", "locked")
+    if user.get("mfa_enabled"):
+        return {"mfa_required": True, "mfa_token": _issue_token(user["_id"], "mfa_login"), "is_new": is_new,
+                "user": {"id": user["_id"], "email": user["email"]}}
+    session = _start_session(user, ["google"])
+    session["is_new"] = is_new
+    return session
 
 
 def get_user(user_id: str) -> dict | None:
@@ -74,6 +137,7 @@ def sign_up(email: str, password: str) -> dict:
     try:
         row = get_service_client().table("users").insert({
             "email": email, "password_hash": hash_password(password), "email_confirmed_at": confirmed,
+            "providers": ["password"],
         }).execute().data[0]
     except DuplicateKey:
         existing = get_user_by_email(email)
@@ -156,7 +220,8 @@ def sign_in_mfa(mfa_token: str, code: str) -> dict:
     if not user or not _check_second_factor(user, code):
         raise AuthError(401, "Invalid two-factor code", "mfa_invalid")
     coll.update_one({"_id": doc["_id"]}, {"$set": {"used_at": _now()}})
-    return _start_session(user, ["pwd", "mfa"])
+    first = "google" if user.get("firebase_uid") and str(user.get("password_hash", "")).startswith("!") else "pwd"
+    return _start_session(user, [first, "mfa"])
 
 
 def _check_second_factor(user: dict, code: str) -> bool:
