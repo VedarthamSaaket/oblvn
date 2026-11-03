@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from backend import realtime
+from backend.accounts import get_user
 from backend.anomaly import check_repeat_wipe, check_verification_failure, score_completed_job
 from backend.audit import log_event
 from backend.config import config
@@ -14,7 +15,7 @@ from backend.hw import pipeline
 from backend.hw.inventory import from_device
 from backend.hw.model import Cancelled, WipeError
 from backend.reporter import generate_certificate
-from backend.supabase_client import get_service_client
+from backend.db import get_service_client
 
 SYSTEM = platform.system()
 _cancel_flags: dict[str, threading.Event] = {}
@@ -203,16 +204,16 @@ def _finalize_with_retry(job_id: str, job: dict, record: dict, retries: int = 5)
 def _finalize(job_id: str, job: dict, record: dict) -> None:
     svc = get_service_client()
     updated = svc.table("wipe_jobs").select("*").eq("id", job_id).maybe_single().execute().data or job
-    user_r = svc.auth.admin.get_user_by_id(job["user_id"])
-    user = {"id": job["user_id"], "email": getattr(getattr(user_r, "user", None), "email", "") or ""}
+    found = get_user(job["user_id"]) or {}
+    user = {"id": job["user_id"], "email": found.get("email", "")}
     org = None
     if job.get("org_id"):
         org = svc.table("organisations").select("name").eq("id", job["org_id"]).maybe_single().execute().data
     approver = None
     if updated.get("approved_by"):
-        ap = svc.auth.admin.get_user_by_id(updated["approved_by"])
-        if getattr(ap, "user", None):
-            approver = {"email": ap.user.email}
+        ap = get_user(updated["approved_by"])
+        if ap:
+            approver = {"email": ap["email"]}
 
     cert = generate_certificate(updated, user, org, approver, record)
     svc.table("wipe_jobs").update({
