@@ -46,17 +46,20 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from backend import jobs, realtime
+from backend.agent_api import agent_devices, find_agent_device, router as agent_router
 from backend.anomaly import (
     acknowledge_anomaly, check_failed_logins, check_new_ip,
-    check_new_operator, check_off_hours_wipe, check_repeat_wipe,
-    check_smart_anomalies, check_unusual_login_hour, check_verification_failure,
+    check_new_operator, check_off_hours_wipe,
+    check_smart_anomalies, check_unusual_login_hour,
     compute_risk_score, run_statistical_batch, check_role_escalation,
+    primary_org, score_login,
 )
 from backend.audit import export_csv, export_json, export_pdf, log_event, verify_chain
-from backend.auth import get_user_role, validate_token
+from backend.auth import current_user, get_user_role, validate_token
 from backend.config import config
 from backend.detector import DeviceDetectionError, detect_devices, get_device_by_serial
-from backend.reporter import generate_certificate
+from backend.file_wipe import PathRejected, check_path
 from backend.supabase_client import get_service_client
 
 # Security module — all helpers live here
@@ -99,6 +102,7 @@ class ResetBody(BaseModel):
 class AnomalyAckBody(BaseModel):
     note: Optional[str] = None
     resolved: bool = False
+    feedback: Optional[str] = None
 
 class OrgBody(BaseModel):
     name: str
@@ -162,45 +166,31 @@ app.add_middleware(
 
 def _scheduled_batch():
     try:
+        from ml.train import run_nightly
+        run_nightly()
+    except Exception as exc:
+        log_event("ml_training_failed", {"error": str(exc)[:500]}, user_id=None)
+    try:
         run_statistical_batch(None)
     except Exception as exc:
-        log_event("scheduled_batch_failed", {"error": str(exc)}, user_id=None)
+        log_event("scheduled_batch_failed", {"error": str(exc)[:500]}, user_id=None)
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=_scheduled_batch, trigger="cron", hour=2, minute=0)
 scheduler.start()
 
-connected_websockets: dict[str, list[WebSocket]] = {}
-_cancel_flags: dict[str, threading.Event] = {}
+app.include_router(agent_router)
 
 
-async def _ws_broadcast(job_id: str, data: dict):
-    room = f"job_{job_id}"
-    for ws in connected_websockets.get(room, []):
-        try:
-            await ws.send_json(data)
-        except Exception:
-            pass
+@app.on_event("startup")
+async def _bind_realtime_loop():
+    realtime.bind_loop(asyncio.get_running_loop())
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Auth helpers
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _get_current_user(request: Request) -> dict:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization token")
-    token = auth[7:]
-    payload = validate_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return {"user_id": payload.get("sub"), "token": token, "payload": payload}
-
-
-def current_user(request: Request) -> dict:
-    return _get_current_user(request)
-
 
 FRONTEND_DIST   = Path(__file__).parent.parent / "frontend" / "dist"
 FRONTEND_PUBLIC = Path(__file__).parent.parent / "frontend" / "public"
@@ -209,56 +199,6 @@ FRONTEND_PUBLIC = Path(__file__).parent.parent / "frontend" / "public"
 # ─────────────────────────────────────────────────────────────────────────────
 # Supabase retry helpers (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _supabase_update_with_retry(
-    svc,
-    table: str,
-    update_data: dict,
-    job_id: str,
-    retries: int = 5,
-    base_delay: float = 3.0,
-) -> None:
-    last_exc = None
-    for attempt in range(retries):
-        try:
-            svc.table(table).update(update_data).eq("id", job_id).execute()
-            return
-        except Exception as exc:
-            last_exc = exc
-            if attempt < retries - 1:
-                wait = base_delay * (attempt + 1)
-                print(
-                    f"[SUPABASE RETRY] attempt {attempt + 1}/{retries} failed "
-                    f"({type(exc).__name__}: {exc}). Retrying in {wait:.0f}s ..."
-                )
-                time.sleep(wait)
-    raise last_exc
-
-
-def _finalize_job_with_retry(
-    job_id: str,
-    job: dict,
-    crypto_key: str | None,
-    broadcast,
-    retries: int = 5,
-    base_delay: float = 3.0,
-) -> None:
-    last_exc = None
-    for attempt in range(retries):
-        try:
-            _finalize_job(job_id, job, crypto_key, broadcast)
-            return
-        except Exception as exc:
-            last_exc = exc
-            if attempt < retries - 1:
-                wait = base_delay * (attempt + 1)
-                print(
-                    f"[FINALIZE RETRY] attempt {attempt + 1}/{retries} failed "
-                    f"({type(exc).__name__}: {exc}). Retrying in {wait:.0f}s ..."
-                )
-                time.sleep(wait)
-    raise last_exc
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # File / folder picker utilities (unchanged)
@@ -291,16 +231,20 @@ async def verify_certificate(cert_id: str):
     svc = get_service_client()
     r = (
         svc.table("wipe_jobs")
-        .select("id,sha256_hash,completed_at,device_model,device_serial,method,standard")
+        .select("id,status,sha256_hash,completed_at,device_model,device_serial,method,standard,"
+                "technique,nist_category,verification_passed")
         .eq("id", cert_id)
         .maybe_single()
         .execute()
     )
-    if not r.data:
+    if not r.data or r.data.get("status") != "completed" or not r.data.get("sha256_hash"):
         raise HTTPException(status_code=404, detail="Certificate not found")
     job = r.data
     return {
         "verified":       True,
+        "technique":      job.get("technique"),
+        "nist_category":  job.get("nist_category"),
+        "verification_passed": job.get("verification_passed"),
         "certificate_id": cert_id,
         "sha256_hash":    job.get("sha256_hash"),
         "completed_at":   job.get("completed_at"),
@@ -354,9 +298,16 @@ async def login(request: Request, body: AuthBody):
             {"email": validated_email, "password": body.password}
         )
         user_id = result.user.id
-        log_event("login_success", {"email": validated_email, "ip_address": ip}, user_id=user_id)
-        check_new_ip(user_id, None, ip)
-        check_unusual_login_hour(user_id, None, datetime.now(timezone.utc))
+        org_id = primary_org(user_id)
+        log_event("login_success", {"email": validated_email, "ip_address": ip}, user_id=user_id, org_id=org_id)
+        now = datetime.now(timezone.utc)
+        for check in (lambda: check_new_ip(user_id, org_id, ip),
+                      lambda: check_unusual_login_hour(user_id, org_id, now),
+                      lambda: score_login(user_id, org_id, ip, now)):
+            try:
+                check()
+            except Exception as exc:
+                print(f"[ANOMALY] login check failed: {exc}")
         return {
             "access_token":  result.session.access_token,
             "refresh_token": result.session.refresh_token,
@@ -367,7 +318,7 @@ async def login(request: Request, body: AuthBody):
     except Exception:
         log_event("login_failed", {"email": validated_email, "ip_address": ip}, user_id=None)
         try:
-            check_failed_logins(validated_email, None)
+            check_failed_logins(validated_email, None, ip)
         except Exception:
             pass
         # Always return the same generic message to prevent user enumeration
@@ -437,15 +388,22 @@ async def list_devices(request: Request, org_id: Optional[str] = Query(None)):
     else:
         org_id = None
 
+    remote = agent_devices(user["user_id"], org_id)
     try:
         devices = detect_devices()
-        for d in devices:
+    except DeviceDetectionError as exc:
+        if remote:
+            return {"devices": remote}
+        return {"error": str(exc), "devices": []}
+    for d in devices:
+        try:
             d["anomalies"] = check_smart_anomalies(
                 d["serial"], d.get("smart_snapshot", {}), org_id, user["user_id"]
             )
-        return {"devices": devices}
-    except DeviceDetectionError as exc:
-        return {"error": str(exc), "devices": []}
+        except Exception as exc:
+            print(f"[ANOMALY] smart check failed: {exc}")
+            d["anomalies"] = []
+    return {"devices": devices + remote}
 
 
 @app.get("/api/devices/refresh")
@@ -471,9 +429,9 @@ async def refresh_devices(request: Request):
 @app.get("/api/devices/{serial}")
 @limiter.limit("60 per minute")
 async def get_device(serial: str, request: Request):
-    current_user(request)
+    user = current_user(request)
     try:
-        d = get_device_by_serial(serial)
+        d = get_device_by_serial(serial) or find_agent_device(serial, user["user_id"], None)
         if not d:
             raise HTTPException(status_code=404, detail="Device not found")
         return d
@@ -919,70 +877,46 @@ async def create_job(request: Request):
     standard = validate_enum(data.get("standard", ""), ALLOWED_STANDARDS, "standard")
 
     target_serial = data.get("device_serial", "")
+    options = _job_options(data.get("options"))
+    agent_id = None
 
     if target_serial.startswith("file:"):
-        file_paths = data.get("file_paths") or []
-        if not file_paths:
-            file_paths = [target_serial.replace("file:", "", 1)]
-
-        missing = [p for p in file_paths if not os.path.exists(p)]
-        if missing:
-            raise HTTPException(
-                status_code=404,
-                detail=f"File(s) not found: {', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}",
-            )
-
-        total_bytes = sum(os.path.getsize(p) for p in file_paths if os.path.isfile(p))
-
-        sources = data.get("sources") or []
-        count   = len(file_paths)
-
-        if sources:
-            folder_sources = [s for s in sources if s.get("type") == "folder"]
-            file_sources   = [s for s in sources if s.get("type") == "file"]
-
-            if folder_sources and not file_sources:
-                if len(folder_sources) == 1:
-                    fname        = folder_sources[0]["path"].replace("\\", "/").rstrip("/").split("/")[-1]
-                    model_label  = f"Folder Wipe — {fname} ({count} files)"
-                    serial_label = folder_sources[0]["path"].replace("\\", "/")
-                else:
-                    model_label  = f"Folder Wipe — {len(folder_sources)} folders ({count} files)"
-                    serial_label = f"{len(folder_sources)} folders"
-            elif file_sources and not folder_sources:
-                model_label  = data.get("device_model") or f"File Wipe ({count} file{'s' if count != 1 else ''})"
-                serial_label = f"{count} file{'s' if count != 1 else ''}"
+        raw_paths = data.get("file_paths") or [target_serial.replace("file:", "", 1)]
+        try:
+            file_paths = [str(check_path(p)) for p in raw_paths]
+        except PathRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        total_bytes = 0
+        for p in file_paths:
+            if os.path.isfile(p):
+                total_bytes += os.path.getsize(p)
             else:
-                model_label  = (
-                    f"Mixed Wipe — {len(file_sources)} file{'s' if len(file_sources) != 1 else ''} "
-                    f"+ {len(folder_sources)} folder{'s' if len(folder_sources) != 1 else ''} ({count} total)"
-                )
-                serial_label = f"{count} items"
-        else:
-            folder = data.get("folder")
-            if folder:
-                fname        = folder.replace("\\", "/").rstrip("/").split("/")[-1]
-                model_label  = data.get("device_model") or f"Folder Wipe — {fname} ({count} files)"
-                serial_label = folder.replace("\\", "/")
-            else:
-                model_label  = data.get("device_model") or f"File Wipe ({count} file{'s' if count != 1 else ''})"
-                serial_label = f"{count} file{'s' if count != 1 else ''}"
-
+                for root_dir, _dirs, names in os.walk(p):
+                    total_bytes += sum(os.path.getsize(os.path.join(root_dir, n)) for n in names
+                                       if os.path.isfile(os.path.join(root_dir, n)))
         device = {
-            "serial":         serial_label,
-            "model":          model_label,
+            "serial":         _file_serial_label(data, file_paths),
+            "model":          _file_model_label(data, file_paths),
             "capacity_bytes": total_bytes,
             "device_type":    "file",
             "node":           file_paths[0],
             "smart_snapshot": {},
         }
-
     else:
         file_paths = []
         try:
             device = get_device_by_serial(target_serial)
-        except DeviceDetectionError as exc:
-            raise HTTPException(status_code=503, detail=str(exc))
+        except DeviceDetectionError:
+            device = None
+        if not device:
+            device = find_agent_device(target_serial, user["user_id"], org_id, data.get("agent_id"))
+            if device:
+                agent_id = device["agent_id"]
+        if device and device.get("is_system"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Refusing to wipe {device.get('node')}: it {device.get('system_reason')}",
+            )
 
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -1002,9 +936,6 @@ async def create_job(request: Request):
 
     status = "pending_approval" if needs_approval else "queued"
 
-    check_new_operator(user["user_id"], org_id, "pending")
-    check_off_hours_wipe("pending", org_id, user["user_id"], datetime.now(timezone.utc))
-
     job = {
         "user_id":               user["user_id"],
         "org_id":                org_id,
@@ -1018,20 +949,28 @@ async def create_job(request: Request):
         "smart_snapshot":        json.dumps(device.get("smart_snapshot")),
         "passes_completed":      0,
         "created_at":            datetime.now(timezone.utc).isoformat(),
-        "file_paths":            json.dumps(file_paths) if file_paths else None,
+        "file_paths":            file_paths or None,
+        "options":               options,
+        "agent_id":              agent_id,
     }
 
     r = svc.table("wipe_jobs").insert(job).execute()
     created = r.data[0]
     log_event(
         "wipe_job_created",
-        {"job_id": created["id"], "device": device["serial"]},
+        {"job_id": created["id"], "device": device["serial"], "agent_id": agent_id},
         user_id=user["user_id"],
         org_id=org_id,
     )
+    for check in (lambda: check_new_operator(user["user_id"], org_id, created["id"]),
+                  lambda: check_off_hours_wipe(created["id"], org_id, user["user_id"], datetime.now(timezone.utc))):
+        try:
+            check()
+        except Exception as exc:
+            print(f"[ANOMALY] job check failed: {exc}")
 
-    if status == "queued":
-        threading.Thread(target=_execute_job, args=(created["id"],), daemon=True).start()
+    if status == "queued" and not agent_id:
+        jobs.start(created["id"])
 
     return JSONResponse(content=created, status_code=201)
 
@@ -1067,15 +1006,21 @@ async def approve_job(job_id: str, request: Request, body: ApproveBody):
     svc = get_service_client()
 
     # IDOR: verify the job actually belongs to the supplied org
-    job_r = svc.table("wipe_jobs").select("org_id,status").eq("id", job_id).maybe_single().execute()
+    job_r = svc.table("wipe_jobs").select("org_id,status,agent_id").eq("id", job_id).maybe_single().execute()
     if not job_r.data:
         raise HTTPException(status_code=404, detail="Job not found")
-    if body.org_id and job_r.data.get("org_id") != body.org_id:
+    if not body.org_id or job_r.data.get("org_id") != body.org_id:
         raise HTTPException(status_code=403, detail="Forbidden: job does not belong to this organisation")
+    if job_r.data.get("status") != "pending_approval":
+        raise HTTPException(status_code=409, detail=f"Job is {job_r.data.get('status')}, not pending approval")
 
-    svc.table("wipe_jobs").update({"status": "queued", "approved_by": user["user_id"]}).eq("id", job_id).execute()
+    updated = (svc.table("wipe_jobs").update({"status": "queued", "approved_by": user["user_id"]})
+               .eq("id", job_id).eq("status", "pending_approval").execute())
+    if not updated.data:
+        raise HTTPException(status_code=409, detail="Job was already approved or cancelled")
     log_event("wipe_job_approved", {"job_id": job_id}, user_id=user["user_id"], org_id=body.org_id)
-    threading.Thread(target=_execute_job, args=(job_id,), daemon=True).start()
+    if not job_r.data.get("agent_id"):
+        jobs.start(job_id)
     return {"ok": True}
 
 
@@ -1102,12 +1047,16 @@ async def cancel_job(job_id: str, request: Request):
             detail=f"Cannot cancel a job with status '{current_status}'. Only active jobs can be cancelled.",
         )
 
-    cancel_event = _cancel_flags.get(job_id)
-    if cancel_event:
-        cancel_event.set()
+    log_event("wipe_job_cancel_requested", {"job_id": job_id, "status": current_status},
+              user_id=user["user_id"], org_id=job.get("org_id"))
+    if current_status == "running":
+        svc.table("wipe_jobs").update({"cancel_requested": True}).eq("id", job_id).execute()
+        jobs.request_cancel(job_id)
+        return {"ok": True, "pending": True,
+                "detail": "Cancellation requested; firmware sanitize commands cannot be interrupted once issued"}
 
-    svc.table("wipe_jobs").update({"status": "cancelled"}).eq("id", job_id).execute()
-    log_event("wipe_job_cancelled", {"job_id": job_id}, user_id=user["user_id"])
+    svc.table("wipe_jobs").update({"status": "cancelled", "cancel_requested": True}).eq("id", job_id) \
+        .in_("status", ["queued", "pending_approval"]).execute()
     return {"ok": True}
 
 
@@ -1199,21 +1148,22 @@ async def audit_export(
     else:
         org_id = None
 
+    scope_user = None if org_id else user["user_id"]
     if format == "csv":
-        content = export_csv(org_id, start, end)
+        content = export_csv(org_id, start, end, scope_user)
         return StreamingResponse(
             io.BytesIO(content.encode()),
             media_type="text/csv",
             headers={"Content-Disposition": "attachment; filename=oblvn-audit.csv"},
         )
     if format == "pdf":
-        pdf_bytes = export_pdf(org_id, start, end)
+        pdf_bytes = export_pdf(org_id, start, end, scope_user)
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
             headers={"Content-Disposition": "attachment; filename=oblvn-audit.pdf"},
         )
-    return {"entries": export_json(org_id, start, end)}
+    return {"entries": export_json(org_id, start, end, scope_user)}
 
 
 @app.get("/api/audit/verify")
@@ -1248,7 +1198,7 @@ async def risk_score(request: Request, org_id: Optional[str] = Query(None)):
         svc = get_service_client()
         assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
 
-    return compute_risk_score(org_id)
+    return compute_risk_score(org_id, user["user_id"])
 
 
 @app.get("/api/anomalies")
@@ -1285,10 +1235,13 @@ async def ack_anomaly(anomaly_id: str, request: Request, body: AnomalyAckBody):
     # IDOR: verify user can access this anomaly before acknowledging it
     assert_anomaly_access(anomaly_id, user["user_id"], svc)
 
+    if body.feedback is not None and body.feedback not in ("true_positive", "false_positive"):
+        raise HTTPException(status_code=400, detail="feedback must be true_positive or false_positive")
     result = acknowledge_anomaly(
         anomaly_id, user["user_id"],
         note=body.note,
         resolved=body.resolved,
+        feedback=body.feedback,
     )
     return result
 
@@ -1486,351 +1439,63 @@ async def job_websocket(websocket: WebSocket, job_id: str, token: str = Query(..
             return
 
     await websocket.accept()
-    room = f"job_{job_id}"
-    connected_websockets.setdefault(room, []).append(websocket)
+    room = realtime.room(job_id)
+    realtime.connected.setdefault(room, []).append(websocket)
 
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        if websocket in connected_websockets.get(room, []):
-            connected_websockets[room].remove(websocket)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Background job execution (unchanged core logic)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _CancelledError(Exception):
-    pass
-
-
-def _check_cancel(job_id: str):
-    ev = _cancel_flags.get(job_id)
-    if ev and ev.is_set():
-        raise _CancelledError(f"Job {job_id} was cancelled")
-
-
-def _wipe_single_file(
-    file_path: str,
-    method: str,
-    standard: str,
-    broadcast,
-    file_index: int,
-    file_total: int,
-    job_id: str,
-):
-    file_size  = os.path.getsize(file_path)
-    chunk_size = 1024 * 1024
-
-    if method == "crypto_erase":
-        from backend.crypto_erase import run_crypto_erase
-
-        def cb(pct, label):
-            _check_cancel(job_id)
-            broadcast({
-                "type":        "progress",
-                "phase":       "crypto",
-                "file_index":  file_index,
-                "file_total":  file_total,
-                "file_path":   file_path,
-                "pass_pct":    pct,
-                "overall_pct": round(((file_index - 1) / file_total + pct / 100 / file_total) * 100, 2),
-                "label":       f"[{file_index}/{file_total}] {label}",
-            })
-
-        run_crypto_erase(file_path, progress_cb=cb)
-
-    else:
-        from backend.wiper import STANDARDS as WIPER_STANDARDS, NIST_PASSES
-        passes     = WIPER_STANDARDS.get(standard, NIST_PASSES)
-        num_passes = len(passes)
-
-        for pass_num, p in enumerate(passes, 1):
-            _check_cancel(job_id)
-            pattern = p["pattern"]
-            if pattern == "zero":
-                chunk = bytearray(chunk_size)
-            elif pattern == "ones":
-                chunk = bytearray(b"\xFF" * chunk_size)
-            elif pattern == "random":
-                chunk = bytearray(os.urandom(chunk_size))
-            else:
-                raw   = p.get("data", b"\x00")
-                chunk = bytearray((raw * (chunk_size // len(raw) + 1))[:chunk_size])
-
-            with open(file_path, "r+b") as f:
-                written = 0
-                while written < file_size:
-                    _check_cancel(job_id)
-                    to_write = min(chunk_size, file_size - written)
-                    f.write(chunk[:to_write])
-                    written += to_write
-                    pass_pct    = (written / file_size) * 100
-                    file_pct    = ((pass_num - 1) / num_passes + pass_pct / 100 / num_passes) * 100
-                    overall_pct = round(((file_index - 1) / file_total + file_pct / 100 / file_total) * 100, 2)
-                    broadcast({
-                        "type":         "progress",
-                        "file_index":   file_index,
-                        "file_total":   file_total,
-                        "file_path":    file_path,
-                        "pass_num":     pass_num,
-                        "total_passes": num_passes,
-                        "pass_pct":     round(pass_pct, 2),
-                        "overall_pct":  overall_pct,
-                        "label":        f"[{file_index}/{file_total}] {p['label']}",
-                    })
-
-    os.remove(file_path)
-
-
-def _execute_job(job_id: str):
-    cancel_event = threading.Event()
-    _cancel_flags[job_id] = cancel_event
-
-    svc = get_service_client()
-    r   = svc.table("wipe_jobs").select("*").eq("id", job_id).maybe_single().execute()
-    if not r.data:
-        _cancel_flags.pop(job_id, None)
-        return
-    job = r.data
-
-    if job["status"] == "cancelled":
-        _cancel_flags.pop(job_id, None)
-        return
-
-    _supabase_update_with_retry(svc, "wipe_jobs", {
-        "status":     "running",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }, job_id)
-
-    loop = asyncio.new_event_loop()
-
-    def broadcast(data):
-        if not loop.is_closed():
-            asyncio.run_coroutine_threadsafe(_ws_broadcast(job_id, data), loop)
-
-    loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
-    loop_thread.start()
-
-    try:
-        target_serial = job["device_serial"]
-        passes_done   = 0
-        verification  = None
-
-        if job.get("device_type") == "file":
-            # ── FILE / FOLDER PATH ─────────────────────────────────────────
-            raw_paths = job.get("file_paths")
-            if raw_paths:
-                try:
-                    file_paths = json.loads(raw_paths) if isinstance(raw_paths, str) else raw_paths
-                except Exception:
-                    file_paths = []
-            else:
-                file_paths = []
-
-            if not file_paths:
-                raise RuntimeError("No file paths recorded for this file wipe job")
-
-            file_total = len(file_paths)
-            method     = job["method"]
-            standard   = job["standard"]
-
-            for file_index, file_path in enumerate(file_paths, 1):
-                _check_cancel(job_id)
-                if not os.path.exists(file_path):
-                    broadcast({
-                        "type":       "warning",
-                        "message":    f"Skipped (not found): {file_path}",
-                        "file_index": file_index,
-                        "file_total": file_total,
-                    })
-                    continue
-                _wipe_single_file(file_path, method, standard, broadcast, file_index, file_total, job_id)
-
-            passes_done  = 1
-            verification = True
-
-        else:
-            # ── HARDWARE PATH ──────────────────────────────────────────────
-            device = get_device_by_serial(target_serial)
-            if not device:
-                raise RuntimeError("Device not found during execution")
-
-            node     = device["node"]
-            method   = job["method"]
-            standard = job["standard"]
-
-            if method == "binary_overwrite":
-                from backend.wiper import run_wipe
-                gen = run_wipe(node, standard, job["device_type"])
-
-                for event in gen:
-                    _check_cancel(job_id)
-                    if event.get("type") == "complete":
-                        passes_done  = event.get("passes_completed", passes_done)
-                        verification = event.get("verification_passed")
-                        break
-                    event["type"] = "progress"
-                    broadcast(event)
-                    if event.get("pass_num"):
-                        passes_done = event["pass_num"]
-
-            elif method == "crypto_erase":
-                from backend.crypto_erase import run_crypto_erase
-
-                def cb(pct, label):
-                    _check_cancel(job_id)
-                    broadcast({"type": "progress", "phase": "crypto", "pass_pct": pct,
-                               "overall_pct": pct, "label": label,
-                               "pass_num": 1, "total_passes": 1})
-
-                result = run_crypto_erase(node, progress_cb=cb)
-
-                _supabase_update_with_retry(svc, "wipe_jobs", {
-                    "status":              "completed",
-                    "completed_at":        datetime.now(timezone.utc).isoformat(),
-                    "passes_completed":    1,
-                    "verification_passed": None,
-                }, job_id)
-
-                _finalize_job_with_retry(job_id, job, result.get("key_displayed_once"), broadcast)
-                return
-
-            else:
-                # full_sanitization hardware path
-                from backend.sanitizer import run_full_sanitization
-                gen = run_full_sanitization(node, standard, job["device_type"])
-                crypto_key = None
-
-                for event in gen:
-                    _check_cancel(job_id)
-                    if event.get("type") == "complete":
-                        passes_done  = event.get("passes_completed", 1)
-                        verification = event.get("verification_passed")
-                        crypto_key   = (event.get("crypto_result") or {}).get("key_displayed_once")
-                        break
-                    event["type"] = "progress"
-                    broadcast(event)
-                    if event.get("pass_num"):
-                        passes_done = event["pass_num"]
-
-                _supabase_update_with_retry(svc, "wipe_jobs", {
-                    "status":              "completed",
-                    "completed_at":        datetime.now(timezone.utc).isoformat(),
-                    "passes_completed":    passes_done,
-                    "verification_passed": verification,
-                }, job_id)
-
-                _finalize_job_with_retry(job_id, job, crypto_key, broadcast)
-                return
-
-        # Shared finalization for file/folder and binary_overwrite paths
-        if verification is False:
-            check_verification_failure(job_id, job.get("org_id"), job["user_id"])
-
-        _supabase_update_with_retry(svc, "wipe_jobs", {
-            "status":              "completed",
-            "completed_at":        datetime.now(timezone.utc).isoformat(),
-            "passes_completed":    passes_done,
-            "verification_passed": verification,
-        }, job_id)
-
-        _finalize_job_with_retry(job_id, job, None, broadcast)
-
-    except _CancelledError:
-        broadcast({"type": "cancelled", "job_id": job_id})
-
-    except Exception as exc:
-        try:
-            current_r = svc.table("wipe_jobs").select("status").eq("id", job_id).maybe_single().execute()
-            if current_r.data and current_r.data["status"] != "cancelled":
-                _supabase_update_with_retry(svc, "wipe_jobs", {
-                    "status":        "failed",
-                    "error_message": str(exc),
-                }, job_id)
-                log_event(
-                    "wipe_job_failed",
-                    {"job_id": job_id, "error": str(exc)},
-                    user_id=job["user_id"],
-                    org_id=job.get("org_id"),
-                )
-                broadcast({"type": "error", "error": str(exc)})
-        except Exception:
-            pass
-
+        pass
     finally:
-        _cancel_flags.pop(job_id, None)
-        time.sleep(0.5)
-        try:
-            loop.call_soon_threadsafe(loop.stop)
-        except Exception:
-            pass
-        loop_thread.join(timeout=5)
-        try:
-            loop.close()
-        except Exception:
-            pass
+        if websocket in realtime.connected.get(room, []):
+            realtime.connected[room].remove(websocket)
 
 
-def _finalize_job(job_id: str, job: dict, crypto_key: str | None, broadcast):
-    svc = get_service_client()
+def _job_options(raw) -> dict:
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="options must be an object")
+    out = {}
+    if raw.get("verify") is not None:
+        if raw["verify"] not in ("sample", "full"):
+            raise HTTPException(status_code=400, detail="options.verify must be sample or full")
+        out["verify"] = raw["verify"]
+    if raw.get("psid") is not None:
+        psid = str(raw["psid"]).strip()
+        if not psid.isalnum() or len(psid) > 64:
+            raise HTTPException(status_code=400, detail="options.psid must be alphanumeric")
+        out["psid"] = psid
+    return out
 
-    r           = svc.table("wipe_jobs").select("*").eq("id", job_id).maybe_single().execute()
-    updated_job = r.data or job
 
-    user_r = get_service_client().auth.admin.get_user_by_id(job["user_id"])
-    user   = (
-        {"id": job["user_id"], "email": getattr(user_r.user, "email", "")}
-        if user_r.user else {"id": job["user_id"], "email": ""}
-    )
+def _file_serial_label(data: dict, file_paths: list[str]) -> str:
+    sources = data.get("sources") or []
+    folders = [s for s in sources if s.get("type") == "folder"]
+    if folders and len(folders) == 1 and len(folders) == len(sources):
+        return folders[0]["path"].replace("\\", "/")
+    if data.get("folder"):
+        return data["folder"].replace("\\", "/")
+    count = len(file_paths)
+    return f"{count} item{'s' if count != 1 else ''}"
 
-    org = None
-    if job.get("org_id"):
-        org_r = (
-            svc.table("organisations")
-            .select("name")
-            .eq("id", job["org_id"])
-            .maybe_single()
-            .execute()
-        )
-        org = org_r.data
 
-    approver = None
-    if updated_job.get("approved_by"):
-        ap_r = get_service_client().auth.admin.get_user_by_id(updated_job["approved_by"])
-        if ap_r.user:
-            approver = {"email": ap_r.user.email}
-
-    cert_result = generate_certificate(updated_job, user, org, approver)
-
-    _supabase_update_with_retry(svc, "wipe_jobs", {
-        "sha256_hash":    cert_result["fields"]["sha256_hash"],
-        "ots_proof_path": cert_result.get("ots_path"),
-        "pdf_path":       cert_result["pdf_path"],
-    }, job_id)
-
-    log_event(
-        "wipe_job_completed",
-        {
-            "job_id":     job_id,
-            "sha256_hash": cert_result["fields"]["sha256_hash"],
-            "cert_id":    cert_result["certificate_id"],
-        },
-        user_id=job["user_id"],
-        org_id=job.get("org_id"),
-    )
-
-    check_repeat_wipe(job["device_serial"], job.get("org_id"), job["user_id"])
-
-    broadcast({
-        "type":           "complete",
-        "job_id":         job_id,
-        "certificate_id": cert_result["certificate_id"],
-        "sha256_hash":    cert_result["fields"]["sha256_hash"],
-        "verify_url":     cert_result["fields"]["verify_url"],
-        "crypto_key":     crypto_key,
-    })
+def _file_model_label(data: dict, file_paths: list[str]) -> str:
+    if data.get("device_model"):
+        return data["device_model"]
+    sources = data.get("sources") or []
+    folders = [s for s in sources if s.get("type") == "folder"]
+    files = [s for s in sources if s.get("type") == "file"]
+    count = len(file_paths)
+    if folders and not files:
+        if len(folders) == 1:
+            name = folders[0]["path"].replace("\\", "/").rstrip("/").split("/")[-1]
+            return f"Folder Wipe — {name}"
+        return f"Folder Wipe — {len(folders)} folders"
+    if folders and files:
+        return f"Mixed Wipe — {len(files)} files + {len(folders)} folders"
+    return f"File Wipe ({count} file{'s' if count != 1 else ''})"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

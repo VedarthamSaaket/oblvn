@@ -1,4 +1,6 @@
 from typing import Any
+
+from fastapi import HTTPException, Request
 import requests
 from jose import jwt
 from jose.exceptions import JWTError
@@ -60,3 +62,14 @@ def get_user_role(user_id: str, org_id: str | None) -> str:
     )
 
     return r.data["role"] if r.data else "individual"
+
+
+def current_user(request: Request) -> dict:
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+    token = header[7:]
+    payload = validate_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return {"user_id": payload.get("sub"), "token": token, "payload": payload}
