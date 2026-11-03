@@ -1,5 +1,5 @@
 import json
-import os
+import re
 import platform
 import subprocess
 from dataclasses import asdict, dataclass
@@ -8,11 +8,8 @@ from typing import Any
 
 SYSTEM = platform.system()
 
-try:
-    from pySMART import Device as SmartDevice
-    PYSMART_AVAILABLE = True
-except ImportError:
-    PYSMART_AVAILABLE = False
+from backend.hw import inventory, smart
+from backend.hw.runner import ToolError
 
 
 class DeviceDetectionError(Exception):
@@ -34,6 +31,11 @@ class Device:
     smart_available: bool
     smart_snapshot: dict[str, Any]
     detected_at: str
+    is_system: bool = False
+    system_reason: str | None = None
+    serial_reliable: bool = True
+    transport: str = ""
+    mountpoints: list[str] | None = None
 
 
 def _human(b: int) -> str:
@@ -84,139 +86,66 @@ def _manufacturer(model: str) -> str:
 
 
 def _smart_for_node(node: str) -> dict:
-    if not PYSMART_AVAILABLE:
-        return {"available": False, "health": "Unknown", "attributes": []}
+    m = re.search(r"PhysicalDrive(\d+)$", node)
+    return smart.snapshot(f"/dev/pd{m.group(1)}" if m else node)
+
+
+INTERFACES = {"nvme": "NVMe", "sata": "SATA", "sas": "SAS", "usb": "USB", "unknown": "Unknown"}
+
+
+def _from_disk(disk) -> Device:
+    snap = smart.snapshot(disk.node)
+    serial = disk.serial
+    reliable = disk.serial_reliable
+    if not reliable and snap.get("serial"):
+        serial, reliable = snap["serial"], True
+    return Device(
+        serial=serial,
+        model=disk.model,
+        manufacturer=_manufacturer(disk.model),
+        capacity_bytes=disk.size_bytes,
+        capacity_human=_human(disk.size_bytes),
+        device_type=disk.device_type,
+        interface=INTERFACES.get(disk.transport, disk.transport.upper()),
+        filesystem="unknown",
+        node=disk.node,
+        health=snap.get("health", "Unknown"),
+        smart_available=snap.get("available", False),
+        smart_snapshot=snap,
+        detected_at=datetime.now(timezone.utc).isoformat(),
+        is_system=disk.is_system,
+        system_reason=disk.system_reason,
+        serial_reliable=reliable,
+        transport=disk.transport,
+        mountpoints=disk.mountpoints,
+    )
+
+
+def _detect_unix() -> list[Device]:
     try:
-        d = SmartDevice(node)
-        attrs = []
-        if d.attributes:
-            for a in d.attributes:
-                if a:
-                    attrs.append({
-                        "id": int(a.num),
-                        "name": a.name,
-                        "value": int(a.value) if a.value else 0,
-                        "worst": int(a.worst) if a.worst else 0,
-                        "threshold": int(a.thresh) if a.thresh else 0,
-                        "raw": str(a.raw),
-                        "flags": a.flags_hex,
-                    })
-        return {
-            "available": True,
-            "health": "Passed" if d.assessment == "PASS" else "Failed",
-            "temperature": d.temperature,
-            "firmware": d.firmware,
-            "attributes": attrs,
-        }
-    except Exception:
-        return {"available": False, "health": "Unknown", "attributes": []}
+        return [_from_disk(d) for d in inventory.list_disks()]
+    except ToolError as exc:
+        print(f"[DETECTOR] {exc}")
+        return []
 
 
-def _detect_linux() -> list[Device]:
+def _windows_boot_disks() -> set[int]:
     code, out, _ = _run([
-        "lsblk", "-J", "-o",
-        "NAME,MODEL,SERIAL,SIZE,TYPE,TRAN,FSTYPE,VENDOR,ROTA",
+        "powershell", "-NoProfile", "-NonInteractive", "-Command",
+        "Get-Disk | Where-Object { $_.IsBoot -or $_.IsSystem } | Select-Object -ExpandProperty Number",
     ])
-    if code != 0 or not out:
-        return []
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
-        return []
-
-    devices = []
-    for blk in data.get("blockdevices", []):
-        if blk.get("type") != "disk":
-            continue
-        node = f"/dev/{blk['name']}"
-        capacity = _parse_size(blk.get("size", "0"))
-        rota = blk.get("rota", "1") == "1"
-        tran = (blk.get("tran") or "").upper()
-        model = (blk.get("model") or blk.get("vendor") or "Unknown").strip()
-        serial = (blk.get("serial") or f"UNKNOWN-{blk['name'].upper()}").strip()
-        fstype = blk.get("fstype") or "unknown"
-
-        if tran == "NVME" or "nvme" in blk["name"]:
-            dtype, iface = "nvme", "NVMe"
-        elif tran == "USB":
-            dtype, iface = "usb_flash", "USB"
-        elif rota:
-            dtype, iface = "hdd", "SATA"
-        else:
-            dtype, iface = "ssd", "SATA"
-
-        smart = _smart_for_node(node)
-        devices.append(Device(
-            serial=serial,
-            model=model,
-            manufacturer=_manufacturer(model),
-            capacity_bytes=capacity,
-            capacity_human=_human(capacity),
-            device_type=dtype,
-            interface=iface,
-            filesystem=fstype,
-            node=node,
-            health=smart.get("health", "Unknown"),
-            smart_available=smart.get("available", False),
-            smart_snapshot=smart,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-        ))
-    return devices
-
-
-def _detect_macos() -> list[Device]:
-    code, out, _ = _run(["diskutil", "list", "-plist"])
     if code != 0:
-        return []
-    try:
-        import plistlib
-        data = plistlib.loads(out.encode())
-    except Exception:
-        return []
+        return set()
+    return {int(x) for x in out.split() if x.strip().isdigit()}
 
-    devices = []
-    for disk in data.get("WholeDisks", []):
-        node = f"/dev/{disk}"
-        code2, out2, _ = _run(["diskutil", "info", "-plist", node])
-        if code2 != 0:
-            continue
-        try:
-            import plistlib
-            info = plistlib.loads(out2.encode())
-        except Exception:
-            continue
 
-        size = info.get("TotalSize", 0)
-        model = (info.get("MediaName") or info.get("IORegistryEntryName") or "Unknown")
-        serial = (info.get("DiskUUID") or info.get("MediaSerialNumber") or f"MAC-{disk.upper()}")
-        fstype = info.get("FilesystemType") or info.get("VolumeName") or "unknown"
-        protocol = (info.get("BusProtocol") or "").upper()
-
-        if "NVME" in protocol:
-            dtype, iface = "nvme", "NVMe"
-        elif "USB" in protocol:
-            dtype, iface = "usb_flash", "USB"
-        elif info.get("SolidState"):
-            dtype, iface = "ssd", "SATA"
-        else:
-            dtype, iface = "hdd", "SATA"
-
-        smart = _smart_for_node(node)
-        devices.append(Device(
-            serial=serial,
-            model=model,
-            manufacturer=_manufacturer(model),
-            capacity_bytes=size,
-            capacity_human=_human(size),
-            device_type=dtype,
-            interface=iface,
-            filesystem=fstype,
-            node=node,
-            health=smart.get("health", "Unknown"),
-            smart_available=smart.get("available", False),
-            smart_snapshot=smart,
-            detected_at=datetime.now(timezone.utc).isoformat(),
-        ))
+def _mark_windows_system(devices: list[Device]) -> list[Device]:
+    boot = _windows_boot_disks()
+    for d in devices:
+        m = re.search(r"PhysicalDrive(\d+)$", d.node)
+        if m and int(m.group(1)) in boot:
+            d.is_system = True
+            d.system_reason = "hosts the Windows boot or system volume"
     return devices
 
 
@@ -450,12 +379,10 @@ def _detect_windows() -> list[Device]:
 def detect_devices() -> list[dict]:
     raw: list[Device] = []
 
-    if SYSTEM == "Linux":
-        raw = _detect_linux()
-    elif SYSTEM == "Darwin":
-        raw = _detect_macos()
+    if SYSTEM in ("Linux", "Darwin"):
+        raw = _detect_unix()
     elif SYSTEM == "Windows":
-        raw = _detect_windows()
+        raw = _mark_windows_system(_detect_windows())
 
     if not raw:
         if SYSTEM == "Windows":
