@@ -32,6 +32,8 @@ def failures(files: list[Path]) -> dict[str, pd.Timestamp]:
 def build(quarters: list[str], negative_rate: float, seed: int) -> Path:
     files = _files(quarters)
     failed = failures(files)
+    last_day = pd.Timestamp(pd.read_csv(files[-1], usecols=["date"], nrows=1)["date"].iloc[0])
+    censor_from = last_day - pd.Timedelta(days=HORIZON_DAYS)
     rng = np.random.default_rng(seed)
     parts = []
     for f in files:
@@ -42,7 +44,8 @@ def build(quarters: list[str], negative_rate: float, seed: int) -> Path:
         fail_at = df["serial_number"].map(failed)
         days = (fail_at - df["date"]).dt.days
         positive = days.between(0, HORIZON_DAYS)
-        keep = positive | (rng.random(len(df)) < negative_rate) & fail_at.isna()
+        known_future = df["date"] <= censor_from
+        keep = positive | (rng.random(len(df)) < negative_rate) & fail_at.isna() & known_future
         df = df[keep].copy()
         df["label"] = positive[keep].astype(int)
         for c in RAW_COLUMNS:

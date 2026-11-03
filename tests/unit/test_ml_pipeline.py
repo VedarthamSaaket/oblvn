@@ -26,6 +26,8 @@ def test_prepare_backblaze_labels_30_days_before_failure(tmp_path, monkeypatch):
     assert fail["label"].eq(1).all() and len(fail) == 31
     assert df[df["serial_number"] != "FAIL1"]["label"].eq(0).all()
     assert df["smart_197_raw"].isna().all()
+    negatives = df[df["label"] == 0]
+    assert negatives["date"].max() <= pd.Timestamp("2024-02-09") - pd.Timedelta(days=30)
 
 
 def test_train_run_writes_report(fake_db, models_dir):
