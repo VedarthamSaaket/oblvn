@@ -183,6 +183,26 @@ def list_macos() -> list[Disk]:
     return disks
 
 
+def from_device(d: dict) -> Disk:
+    transport = d.get("transport") or {"NVMe": "nvme", "USB": "usb", "SATA": "sata", "SAS": "sas"}.get(d.get("interface", ""), "unknown")
+    return Disk(
+        node=d["node"],
+        name=d["node"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
+        serial=d.get("serial", ""),
+        model=d.get("model", "Unknown"),
+        size_bytes=int(d.get("capacity_bytes") or 0),
+        logical_sector=512,
+        transport=transport,
+        rotational=d.get("device_type") == "hdd",
+        removable=d.get("device_type") == "usb_flash",
+        device_type=d.get("device_type", "hdd"),
+        is_system=bool(d.get("is_system")),
+        system_reason=d.get("system_reason"),
+        mountpoints=d.get("mountpoints") or [],
+        serial_reliable=d.get("serial_reliable", True),
+    )
+
+
 def list_disks() -> list[Disk]:
     if SYSTEM == "Linux":
         return parse_lsblk(_lsblk())

@@ -109,6 +109,14 @@ class _Runner:
             caps = simulated_caps(self.disk)
             node = self.disk.node
             size = self.disk.size_bytes
+        elif SYSTEM == "Windows":
+            from backend.hw import windows
+            self.disk, cleared = windows.prepare(self.disk)
+            self.record["unmount"] = cleared
+            caps = Capabilities(notes=["firmware sanitize is not driven from Windows; use the OBLVN Linux agent"])
+            node = self.disk.node
+            size = self.disk.size_bytes
+            self.record["smart_before"] = smart.snapshot(self.disk.node)
         else:
             self.disk, unmounts = preflight.check(self.disk.node)
             self.record["unmount"] = unmounts
@@ -154,7 +162,7 @@ class _Runner:
                 else:
                     executors.FIRMWARE_EXECUTORS[step.kind](self.disk, caps, step, ctx)
                     result = {}
-                    if step.kind in ("remove_hpa", "restore_dco"):
+                    if step.kind in ("remove_hpa", "restore_dco") and SYSTEM == "Linux":
                         size = inventory.exact_size(self.disk)
                 elapsed = time.monotonic() - t0
                 if step.kind not in ("overwrite", "verify"):
@@ -180,7 +188,7 @@ class _Runner:
             for ks in self.keystreams:
                 ks.destroy()
         total = time.monotonic() - started
-        if not self.dry_run:
+        if not self.dry_run and SYSTEM != "Windows":
             self.record["smart_after"] = smart.snapshot(self.disk.node)
         self.record["verification"] = verification
         self.record["passes_completed"] = passes_done

@@ -1,15 +1,14 @@
-import ctypes
 import os
-import platform
 import re
 import shutil
-import signal
 import subprocess
-import threading
 import time
 from collections.abc import Generator
 
 from backend.config import config
+from backend.hw.patterns import NIST_PASSES, STANDARDS, passes_for
+
+
 def _is_usb_write_protected() -> bool:
     """
     Check the Windows StorageDevicePolicy registry key that silently
@@ -98,62 +97,12 @@ def _wipe_windows(node: str, passes: list[dict]) -> Generator[dict, None, None]:
     )
 
     yield from _wipe_windows_volume_fill(drive_letter, passes)
-SYSTEM = platform.system()
 DRY_RUN = config.DRY_RUN
-
-DOD_PASSES = [
-    {"pattern": "zero",   "label": "Pass 1/3 — 0x00 overwrite"},
-    {"pattern": "ones",   "label": "Pass 2/3 — 0xFF overwrite"},
-    {"pattern": "random", "label": "Pass 3/3 — random overwrite"},
+FREE_SPACE_NOTES = [
+    "fills free space on the mounted volume only",
+    "existing files, filesystem metadata, slack space, the partition table, HPA/DCO areas and flash over-provisioning are not touched",
+    "this is not a NIST 800-88 Clear or Purge; run OBLVN as Administrator or use the Linux agent for a device sanitize",
 ]
-
-GUTMANN_PASSES = [
-    {"pattern": "random", "label": "Pass 1 — random"},
-    {"pattern": "random", "label": "Pass 2 — random"},
-    {"pattern": "random", "label": "Pass 3 — random"},
-    {"pattern": "random", "label": "Pass 4 — random"},
-    {"pattern": "bytes",  "data": bytes([0x55] * 512), "label": "Pass 5 — 0x55"},
-    {"pattern": "bytes",  "data": bytes([0xAA] * 512), "label": "Pass 6 — 0xAA"},
-    {"pattern": "bytes",  "data": (bytes([0x92, 0x49, 0x24]) * 171)[:512], "label": "Pass 7"},
-    {"pattern": "bytes",  "data": (bytes([0x49, 0x24, 0x92]) * 171)[:512], "label": "Pass 8"},
-    {"pattern": "bytes",  "data": (bytes([0x24, 0x92, 0x49]) * 171)[:512], "label": "Pass 9"},
-    {"pattern": "bytes",  "data": bytes([0x00] * 512), "label": "Pass 10 — 0x00"},
-    {"pattern": "bytes",  "data": bytes([0x11] * 512), "label": "Pass 11 — 0x11"},
-    {"pattern": "bytes",  "data": bytes([0x22] * 512), "label": "Pass 12 — 0x22"},
-    {"pattern": "bytes",  "data": bytes([0x33] * 512), "label": "Pass 13 — 0x33"},
-    {"pattern": "bytes",  "data": bytes([0x44] * 512), "label": "Pass 14 — 0x44"},
-    {"pattern": "bytes",  "data": bytes([0x55] * 512), "label": "Pass 15 — 0x55"},
-    {"pattern": "bytes",  "data": bytes([0x66] * 512), "label": "Pass 16 — 0x66"},
-    {"pattern": "bytes",  "data": bytes([0x77] * 512), "label": "Pass 17 — 0x77"},
-    {"pattern": "bytes",  "data": bytes([0x88] * 512), "label": "Pass 18 — 0x88"},
-    {"pattern": "bytes",  "data": bytes([0x99] * 512), "label": "Pass 19 — 0x99"},
-    {"pattern": "bytes",  "data": bytes([0xAA] * 512), "label": "Pass 20 — 0xAA"},
-    {"pattern": "bytes",  "data": bytes([0xBB] * 512), "label": "Pass 21 — 0xBB"},
-    {"pattern": "bytes",  "data": bytes([0xCC] * 512), "label": "Pass 22 — 0xCC"},
-    {"pattern": "bytes",  "data": bytes([0xDD] * 512), "label": "Pass 23 — 0xDD"},
-    {"pattern": "bytes",  "data": bytes([0xEE] * 512), "label": "Pass 24 — 0xEE"},
-    {"pattern": "bytes",  "data": bytes([0xFF] * 512), "label": "Pass 25 — 0xFF"},
-    {"pattern": "bytes",  "data": (bytes([0x92, 0x49, 0x24]) * 171)[:512], "label": "Pass 26"},
-    {"pattern": "bytes",  "data": (bytes([0x49, 0x24, 0x92]) * 171)[:512], "label": "Pass 27"},
-    {"pattern": "bytes",  "data": (bytes([0x24, 0x92, 0x49]) * 171)[:512], "label": "Pass 28"},
-    {"pattern": "bytes",  "data": (bytes([0x6D, 0xB6, 0xDB]) * 171)[:512], "label": "Pass 29"},
-    {"pattern": "bytes",  "data": (bytes([0xB6, 0xDB, 0x6D]) * 171)[:512], "label": "Pass 30"},
-    {"pattern": "bytes",  "data": (bytes([0xDB, 0x6D, 0xB6]) * 171)[:512], "label": "Pass 31"},
-    {"pattern": "random", "label": "Pass 32 — random"},
-    {"pattern": "random", "label": "Pass 33 — random"},
-    {"pattern": "random", "label": "Pass 34 — random"},
-    {"pattern": "random", "label": "Pass 35 — random"},
-]
-
-NIST_PASSES = [
-    {"pattern": "random", "label": "Pass 1/1 — random overwrite (NIST 800-88)"},
-]
-
-STANDARDS = {
-    "dod_5220_22m": DOD_PASSES,
-    "gutmann":      GUTMANN_PASSES,
-    "nist_800_88":  NIST_PASSES,
-}
 
 
 def _progress(i: int, total: int, pct: float, label: str, sector: int = 0, eta: int = 0) -> dict:
@@ -167,125 +116,6 @@ def _progress(i: int, total: int, pct: float, label: str, sector: int = 0, eta: 
         "eta_seconds":  eta,
     }
 
-
-def _get_device_size(node: str) -> int:
-    """Get size of a file or block device."""
-    try:
-        stat = os.stat(node)
-        if stat.st_size > 0:
-            return stat.st_size
-    except OSError:
-        pass
-    try:
-        with open(node, "rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            if size > 0:
-                return size
-    except OSError:
-        pass
-    return 1 * 1024 ** 3  # 1 GiB fallback
-
-
-def _write_pattern_with_progress(
-    node: str, chunk: bytes, pass_num: int, total_passes: int, label: str,
-) -> Generator[dict, None, None]:
-    size = _get_device_size(node)
-    chunk_size = len(chunk)
-    with open(node, "r+b") as f:
-        written = 0
-        while written < size:
-            to_write = min(chunk_size, size - written)
-            f.write(chunk[:to_write])
-            written += to_write
-            pct = (written / size) * 100
-            yield _progress(pass_num, total_passes, pct, label, sector=written // 512)
-        f.flush()
-        os.fsync(f.fileno())
-
-
-def _run_dd_with_progress(
-    cmd: list[str], node: str, pass_num: int, total_passes: int, label: str,
-) -> Generator[dict, None, None]:
-    size = _get_device_size(node)
-    proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True)
-
-    last_pct = 0.0
-
-    def _send_signal():
-        while proc.poll() is None:
-            try:
-                proc.send_signal(signal.SIGUSR1)
-            except (ProcessLookupError, OSError):
-                break
-            time.sleep(1.0)
-
-    threading.Thread(target=_send_signal, daemon=True).start()
-
-    stderr_buf = ""
-    while proc.poll() is None:
-        line = proc.stderr.readline()
-        if not line:
-            time.sleep(0.2)
-            continue
-        stderr_buf = line.strip()
-        try:
-            if "bytes" in stderr_buf and "copied" in stderr_buf:
-                bytes_done = int(stderr_buf.split()[0])
-                last_pct = min((bytes_done / size) * 100, 99.0)
-        except (ValueError, IndexError, ZeroDivisionError):
-            pass
-        yield _progress(pass_num, total_passes, last_pct, label, sector=int(last_pct * size / 51200))
-
-    proc.stderr.read()
-    rc = proc.wait()
-    if rc not in (0, 1):
-        raise RuntimeError(f"dd failed with return code {rc}: {stderr_buf}")
-    yield _progress(pass_num, total_passes, 100.0, label)
-
-
-def _wipe_unix(node: str, passes: list[dict], bs: str = "4M") -> Generator[dict, None, None]:
-    total = len(passes)
-    for i, p in enumerate(passes, 1):
-        label   = p["label"]
-        pattern = p["pattern"]
-
-        if DRY_RUN:
-            for pct in range(0, 101, 5):
-                time.sleep(0.02)
-                yield _progress(i, total, float(pct), f"[DRY RUN] {label}")
-            continue
-
-        if pattern == "zero":
-            yield from _run_dd_with_progress(
-                ["dd", "if=/dev/zero", f"of={node}", f"bs={bs}", "conv=fdatasync"],
-                node, i, total, label,
-            )
-        elif pattern == "ones":
-            chunk = b"\xFF" * (4 * 1024 * 1024)
-            yield from _write_pattern_with_progress(node, chunk, i, total, label)
-        elif pattern == "random":
-            yield from _run_dd_with_progress(
-                ["dd", "if=/dev/urandom", f"of={node}", f"bs={bs}", "conv=fdatasync"],
-                node, i, total, label,
-            )
-        else:
-            raw   = p.get("data", b"\x00" * 4096)
-            chunk = (raw * ((4 * 1024 * 1024) // len(raw) + 1))[:4 * 1024 * 1024]
-            yield from _write_pattern_with_progress(node, chunk, i, total, label)
-
-
-def _wipe_linux(node: str, passes: list[dict]) -> Generator[dict, None, None]:
-    yield from _wipe_unix(node, passes, bs="4M")
-
-
-def _wipe_macos(node: str, passes: list[dict]) -> Generator[dict, None, None]:
-    yield from _wipe_unix(node, passes, bs="4m")
-
-
-# ---------------------------------------------------------------------------
-# Windows wipe — volume-fill approach, no Administrator required
-# ---------------------------------------------------------------------------
 
 def _get_disk_index(node: str) -> int:
     """Extract integer disk index from a path like \\.\PhysicalDrive2 -> 2."""
@@ -444,65 +274,22 @@ def _wipe_windows_volume_fill(
         pass
 
 
-# ---------------------------------------------------------------------------
-# Verification
-# ---------------------------------------------------------------------------
-
-def verify_overwrite(node: str, expected_pattern: str, sample_sectors: int = 100) -> bool:
-    if DRY_RUN:
-        return True
-    import random as _random
-    try:
-        with open(node, "rb") as f:
-            f.seek(0, 2)
-            size        = f.tell()
-            sector_size = 512
-            num_sectors = size // sector_size
-            for _ in range(min(sample_sectors, num_sectors)):
-                sector = _random.randint(0, num_sectors - 1)
-                f.seek(sector * sector_size)
-                data = f.read(sector_size)
-                if expected_pattern == "zero" and data != b"\x00" * sector_size:
-                    return False
-                if expected_pattern == "ones" and data != b"\xFF" * sector_size:
-                    return False
-        return True
-    except OSError:
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-def run_wipe(node: str, standard: str, device_type: str) -> Generator[dict, None, None]:
-    passes = STANDARDS.get(standard, NIST_PASSES)
-
-    if SYSTEM == "Linux":
-        gen = _wipe_linux(node, passes)
-    elif SYSTEM == "Darwin":
-        gen = _wipe_macos(node, passes)
-    elif SYSTEM == "Windows":
-        if device_type == "file":
-            gen = _wipe_unix(node, passes)
-        else:
-            gen = _wipe_windows(node, passes)
-    else:
-        raise OSError(f"Unsupported OS: {SYSTEM}")
-
-    yield from gen
-
-    last_pattern = passes[-1]["pattern"]
-
-    # Volume-fill wipe on Windows doesn't expose raw sectors for verification
-    if SYSTEM == "Windows" and device_type != "file":
-        verification_passed = True
-    else:
-        verification_passed = verify_overwrite(node, last_pattern)
-
+def run_free_space_fill(node: str, standard: str) -> Generator[dict, None, None]:
+    passes = passes_for(standard)
+    yield from _wipe_windows(node, passes)
     yield {
-        "type":                "complete",
-        "passes_completed":    len(passes),
-        "verification_passed": verification_passed,
-        "standard":            standard,
+        "type": "complete",
+        "ok": True,
+        "technique": "free_space_fill",
+        "nist_category": "none",
+        "passes_completed": len(passes),
+        "verification_passed": None,
+        "standard": standard,
+        "record": {
+            "platform": "Windows",
+            "technique": "free_space_fill",
+            "nist_category": "none",
+            "notes": FREE_SPACE_NOTES,
+            "verification": {"check": "none", "passed": None, "reason": "volume-level writes cannot be read back by sector"},
+        },
     }
