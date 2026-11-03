@@ -100,3 +100,15 @@ def api(fake_db, monkeypatch):
 
 def bearer(user_id: str) -> dict:
     return {"Authorization": f"Bearer user:{user_id}"}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits():
+    import sys
+    server = sys.modules.get("backend.server")
+    if server is not None:
+        server.limiter.reset()
+    security = sys.modules.get("backend.security")
+    if security is not None:
+        security._traffic_monitor.__init__()
+    yield
