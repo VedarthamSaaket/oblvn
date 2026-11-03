@@ -31,7 +31,9 @@ def models_dir(tmp_path, monkeypatch):
     import ml.feedback
     import ml.paths
     import ml.registry
+    import ml.train
     monkeypatch.setattr(ml.paths, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(ml.train, "MODELS_DIR", tmp_path)
     monkeypatch.setattr(ml.registry, "MODELS_DIR", tmp_path)
     monkeypatch.setattr(ml.feedback, "MODELS_DIR", tmp_path)
     ml.registry._cache.clear()
