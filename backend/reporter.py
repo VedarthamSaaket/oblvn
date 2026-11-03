@@ -43,6 +43,20 @@ def _human_bytes(n) -> str:
     return f"{n:.1f} PB"
 
 
+def _verification_method(v: dict | None) -> str | None:
+    if not v:
+        return None
+    if v.get("simulated"):
+        return "simulated (dry run)"
+    check = v.get("check")
+    if check == "pattern":
+        return f"{v.get('mode', 'sample')} keyed pattern read-back, {v.get('samples', 0)} blocks, {v.get('mismatches', 0)} mismatches"
+    if check == "changed":
+        return (f"pre/post sector hash, {v.get('changed', 0)} changed, "
+                f"{v.get('unchanged', 0)} unchanged, {v.get('indeterminate', 0)} indeterminate")
+    return v.get("reason") or check
+
+
 def _generate_html(cert: dict, qr_b64: str) -> str:
     cert_id       = cert.get("certificate_id", "")
     issued_at     = cert.get("issued_at", "")
@@ -53,7 +67,12 @@ def _generate_html(cert: dict, qr_b64: str) -> str:
     wipe_method   = (cert.get("wipe_method") or "").replace("_", " ").title()
     wipe_standard = (cert.get("wipe_standard") or "").upper().replace("_", " ")
     passes        = str(cert.get("passes_completed", 0))
-    verify_status = "Passed" if cert.get("verification_passed") else "N/A"
+    verified      = cert.get("verification_passed")
+    verify_status = "Passed" if verified else "Failed" if verified is False else "Not verifiable"
+    technique     = (cert.get("sanitize_technique") or "—").replace("_", " ").replace("+", " + ")
+    nist_category = {"purge": "Purge", "clear": "Clear", "none": "None (not a NIST sanitize)",
+                     "not_applicable": "File level (not a media sanitize)"}.get(cert.get("nist_800_88_category"), "—")
+    verify_method = cert.get("verification_method") or "—"
     operator      = cert.get("operator_name", "—")
     org           = cert.get("organisation_name") or "—"
     sha256        = cert.get("sha256_hash", "")
@@ -379,8 +398,20 @@ def _generate_html(cert: dict, qr_b64: str) -> str:
       <div class="field-value">{passes}</div>
     </div>
     <div>
+      <div class="field-label">Sanitize Technique</div>
+      <div class="field-value">{technique}</div>
+    </div>
+    <div>
+      <div class="field-label">NIST 800-88 Category</div>
+      <div class="field-value">{nist_category}</div>
+    </div>
+    <div>
       <div class="field-label">Verification Read-back</div>
       <div class="field-value">{verify_status}</div>
+    </div>
+    <div>
+      <div class="field-label">Verification Method</div>
+      <div class="field-value">{verify_method}</div>
     </div>
     <div>
       <div class="field-label">Operator</div>
@@ -425,6 +456,7 @@ def generate_certificate(
     user: dict,
     org: dict | None = None,
     approver: dict | None = None,
+    record: dict | None = None,
 ) -> dict:
     cert_id   = job.get("id", str(uuid.uuid4()))
     issued_at = datetime.now(timezone.utc).isoformat()
@@ -447,6 +479,12 @@ def generate_certificate(
         "organisation_name":     org.get("name") if org else None,
         "approver_name":         approver.get("email") if approver else None,
         "smart_snapshot":        job.get("smart_snapshot"),
+        "sanitize_technique":    (record or {}).get("technique") or job.get("technique"),
+        "nist_800_88_category":  (record or {}).get("nist_category") or job.get("nist_category"),
+        "verification_method":   _verification_method((record or {}).get("verification")),
+        "wipe_host":             (record or {}).get("hostname"),
+        "wipe_platform":         (record or {}).get("platform"),
+        "dry_run":               bool((record or {}).get("dry_run")),
     }
 
     sha256     = _compute_hash(cert_fields)
