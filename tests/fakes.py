@@ -23,6 +23,14 @@ def _is(v, value):
     return v is None if value == "null" else v == value
 
 
+def _sort_key(value):
+    if value is None:
+        return (2, 0, "")
+    if isinstance(value, (int, float)):
+        return (0, value, "")
+    return (1, 0, str(value))
+
+
 class Query:
     def __init__(self, db, name):
         self.db = db
@@ -125,7 +133,7 @@ class Query:
             return Response(rows)
         rows = [copy.deepcopy(r) for r in self._match()]
         for col, desc in reversed(self.order_by):
-            rows.sort(key=lambda r: (r.get(col) is None, str(r.get(col))), reverse=desc)
+            rows.sort(key=lambda r: _sort_key(r.get(col)), reverse=desc)
         total = len(rows)
         if self.range_:
             rows = rows[self.range_[0]:self.range_[1] + 1]

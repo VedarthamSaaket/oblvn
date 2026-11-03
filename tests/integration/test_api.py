@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from tests.conftest import bearer
@@ -56,9 +58,8 @@ def test_agent_end_to_end(api, fake_db, monkeypatch):
     monkeypatch.setattr(jobs, "generate_certificate", lambda job, user, org, approver, record: {
         "certificate_id": job["id"], "pdf_path": "/tmp/x.pdf", "ots_path": None,
         "fields": {"sha256_hash": "a" * 64, "verify_url": "http://x/verify"}})
-    monkeypatch.setattr(jobs.threading, "Thread", _InlineThread)
     import backend.agent_api as agent_api
-    monkeypatch.setattr(agent_api.threading, "Thread", _InlineThread)
+    monkeypatch.setattr(agent_api, "threading", SimpleNamespace(Thread=_InlineThread))
 
     code = api.post("/api/agents/pairing-code", headers=bearer(USER), json={"name": "rack-1"}).json()["code"]
     reg = api.post("/api/agents/register", json={"code": code, "hostname": "live", "platform": "Linux"})
@@ -94,7 +95,7 @@ def test_agent_end_to_end(api, fake_db, monkeypatch):
 def test_agent_failed_verification_never_completes(api, fake_db, monkeypatch):
     from backend import jobs
     import backend.agent_api as agent_api
-    monkeypatch.setattr(agent_api.threading, "Thread", _InlineThread)
+    monkeypatch.setattr(agent_api, "threading", SimpleNamespace(Thread=_InlineThread))
     called = []
     monkeypatch.setattr(jobs, "generate_certificate", lambda *a: called.append(a))
     fake_db.tables["agents"] = [{"id": "88888888-8888-8888-8888-888888888888", "user_id": USER, "org_id": None,

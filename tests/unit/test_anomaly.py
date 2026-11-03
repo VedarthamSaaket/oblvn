@@ -61,6 +61,8 @@ def test_failed_logins_by_email_and_ip(fake_db):
          "event_payload": {"email": f"u{i % 3}@x.io", "ip_address": "9.9.9.9"}} for i in range(12)
     ] + [{"event_type": "login_failed", "created_at": now,
           "event_payload": {"email": "a@x.io", "ip_address": "1.1.1.1"}} for _ in range(5)]
+    for i, row in enumerate(fake_db.tables["audit_log"]):
+        row.update({"id": i + 1, "prev_entry_hash": f"{i:064d}", "entry_hash": f"{i + 1:064d}", "org_id": None})
     found = anomaly.check_failed_logins("a@x.io", None, "1.1.1.1")
     assert [f["anomaly_type"] for f in found] == ["brute_force_login"]
     stuffing = anomaly.check_failed_logins("u0@x.io", None, "9.9.9.9")
