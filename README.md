@@ -43,6 +43,8 @@ FLASK_SECRET_KEY=any-long-random-string
 
 In your Supabase dashboard, go to the SQL Editor and run the contents of `supabase/schema.sql`. This creates all tables, RLS policies, triggers, and enables Realtime for wipe job progress.
 
+Then run every file in supabase/migrations in number order.
+
 **4. Build the frontend**
 
 ```bash
@@ -78,9 +80,11 @@ oblvn/
   backend/
     server.py             Flask REST API + Flask-SocketIO
     detector.py           Cross-platform device enumeration + S.M.A.R.T.
-    wiper.py              Binary overwrite engine (DoD, Gutmann, NIST)
-    crypto_erase.py       AES-256-CBC encryption + ctypes.memset key destruction
-    sanitizer.py          Full sanitization orchestrator
+    hw/                   Disk inventory, capability probe, planner, firmware executors, overwrite, verification
+    jobs.py               Job executor, completion and certificate issue
+    file_wipe.py          File and folder wipes with a path allowlist
+    agent_api.py          Agent pairing, heartbeat, job claim, progress and results
+    wiper.py              Windows free-space fill fallback
     timestamps.py         OpenTimestamps, Bitcoin-anchored certificate proofs
     reporter.py           WeasyPrint PDF/A certificate generation
     audit.py              Cryptographically chained append-only audit log
@@ -94,8 +98,11 @@ oblvn/
     src/lib/api.js        Flask API client
     src/lib/supabase.js   Supabase client
     public/landing.html   Static landing page
+  agent/                  Linux wipe agent and live USB build config
+  ml/                     Anomaly models, training and Backblaze scripts
   supabase/
     schema.sql            PostgreSQL schema, RLS policies, triggers
+    migrations/           Run these in order after schema.sql
   tests/
     unit/                 Unit tests per backend module
     integration/          API integration tests
@@ -109,39 +116,33 @@ oblvn/
 
 ## Wipe Methods
 
-| Method | Description | Best For |
-|---|---|---|
-| Binary Obliteration | Multi-pass overwrite. DoD 5220.22-M (3 pass), Gutmann (35 pass), or NIST 800-88 (1 pass) | HDDs |
-| Crypto Erasure | AES-256-CBC encrypt then destroy key via ctypes.memset. Key shown once, never stored | SSDs, NVMe |
-| Full Sanitization | Overwrite passes + crypto seal + sector verification + certificate | All types, highest assurance |
+Hardware wipes run through backend/hw/pipeline.py on Linux, either in the server or in the OBLVN Linux agent.
+Crypto erase uses the drive's own firmware to destroy its media key (NVMe sanitize or format, ATA sanitize crypto scramble, SCSI sanitize, or an Opal PSID revert).
+If the drive has no firmware crypto erase, the job is refused instead of faked.
+Binary obliteration is a software overwrite of every addressable sector using the chosen standard, and counts as NIST 800-88 Clear.
+Full sanitization runs the strongest firmware purge the drive supports, then one keyed overwrite, then a read-back check.
+Every random pass is an AES-256-CTR keystream, so the read-back can compare sectors exactly.
+The boot disk, anything still mounted after unmount, and disks held by LVM, dm-crypt or RAID are refused.
+On macOS the server can only do software overwrites, after diskutil unmountDisk, on the raw /dev/rdisk node.
+On Windows a raw overwrite needs an Administrator terminal; without it OBLVN falls back to a free-space fill that is labelled as not a NIST sanitize.
+File wipes are limited to OBLVN_FILE_WIPE_ROOTS (default is the invoking user's home folder) and never follow symlinks.
+A job that fails or fails verification is marked failed and never gets a certificate.
 
 ---
 
 ## Anomaly Detection
 
-Two-layer engine runs on every relevant event and nightly in batch:
-
-**Rule-based layer (real-time)**
-- Brute-force login detection (configurable failed-login threshold per org)
-- New IP address login alert
-- Unusual login hour detection
-- Role escalation detection
-- Wipe verification failure (critical)
-- Off-hours wipe submission
-- Repeat wipe of same device within configurable window
-- New operator first wipe flag
-- S.M.A.R.T. triggers: reallocated sectors, temperature over 55C, power-on hours over 50,000, FAILED attributes
-
-**Statistical layer (nightly batch)**
-- Z-score analysis on wipe job durations
-- Switches from seeded baseline to real data after 30 events
-
-Anomalies are written to a dedicated `anomalies` table and flagged in the audit log. Org Admin and Team Lead can acknowledge, add notes, and mark resolved. Risk score (0-100) shown on dashboard.
-
-**Sensitivity levels (per org)**
-- Low: permissive thresholds, fewer alerts
-- Medium: default
-- High: strict thresholds, maximum detection
+Rules run in real time for logins, wipe jobs and S.M.A.R.T. data.
+Each anomaly has a dedupe key so the same open issue is never written twice.
+Login and off-hours checks use the organisation's timezone and working hours.
+Login hour baselines use circular statistics, so 23:00 and 01:00 are two hours apart.
+The nightly batch compares wipe speed per GiB per pass within the same drive type and technique.
+The ML layer lives in ml/ and is trained nightly by the scheduler or by python -m ml.train.
+Model A predicts wipe duration with quantile gradient boosting and flags wipes that are too fast or too slow.
+Model B is an Isolation Forest per organisation for job and login behaviour, with the top reasons on every alert.
+Model C is a drive failure classifier trained on the public Backblaze SMART dataset.
+Model D tunes thresholds from true positive and false positive feedback sent with the acknowledge endpoint.
+Trained models are saved in ml/models and raw data in ml/data, both kept out of git.
 
 ---
 
@@ -175,6 +176,18 @@ pip install opentimestamps-client
 ots upgrade ~/.oblvn/ots/{cert-id}.ots
 ots verify ~/.oblvn/ots/{cert-id}.ots
 ```
+
+---
+
+## Linux Wipe Agent
+
+The agent runs on a Linux machine or the live USB built from agent/live/build.sh.
+Create a pairing code with POST /api/agents/pairing-code and a JSON body with a name.
+On the agent run sudo python3 -m agent pair --server https://your-oblvn --code XXXX-XXXX.
+Then run sudo python3 -m agent run.
+The agent reports its disks every 30 seconds and they show up in the Devices page.
+Jobs for those disks are queued for the agent and its results come back to the server, which issues the certificate.
+The live USB asks for the server and pairing code on screen the first time it boots.
 
 ---
 
