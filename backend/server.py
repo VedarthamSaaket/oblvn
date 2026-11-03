@@ -57,7 +57,7 @@ from backend.anomaly import (
     primary_org, score_login,
 )
 from backend.audit import export_csv, export_json, export_pdf, log_event, verify_chain
-from backend.auth import current_user, get_user_role, validate_token
+from backend.auth import current_user, get_user_role
 from backend.config import config
 from backend.detector import DeviceDetectionError, detect_devices, get_device_by_serial
 from backend.file_wipe import PathRejected, check_path
@@ -95,7 +95,7 @@ class AuthBody(BaseModel):
     password: str
 
 class RefreshBody(BaseModel):
-    refresh_token: str
+    refresh_token: Optional[str] = None
 
 class ResetBody(BaseModel):
     email: str
@@ -292,6 +292,16 @@ async def register(request: Request, body: AuthBody):
             "confirm_email": result["confirm_email"]}
 
 
+REFRESH_COOKIE = "oblvn_refresh"
+
+
+def _session_response(body: dict, refresh_token: str) -> JSONResponse:
+    response = JSONResponse(content=body)
+    response.set_cookie(REFRESH_COOKIE, refresh_token, max_age=config.REFRESH_TOKEN_TTL, path="/api/auth",
+                        httponly=True, secure=config.COOKIE_SECURE, samesite="strict")
+    return response
+
+
 def _login_success(session: dict, ip: str) -> dict:
     user_id = session["user"]["id"]
     org_id = primary_org(user_id)
@@ -305,7 +315,7 @@ def _login_success(session: dict, ip: str) -> dict:
             check()
         except Exception as exc:
             print(f"[ANOMALY] login check failed: {exc}")
-    return {k: session[k] for k in ("access_token", "refresh_token", "expires_in", "token_type", "user")}
+    return {k: session[k] for k in ("access_token", "expires_in", "token_type", "user")}
 
 
 def _login_failed(email: str, ip: str, exc: AuthError) -> None:
@@ -328,7 +338,7 @@ async def login(request: Request, body: AuthBody):
         raise HTTPException(status_code=exc.status, detail=str(exc))
     if result.get("mfa_required"):
         return {"mfa_required": True, "mfa_token": result["mfa_token"]}
-    return _login_success(result, ip)
+    return _session_response(_login_success(result, ip), result["refresh_token"])
 
 
 @app.post("/api/auth/firebase")
@@ -345,7 +355,8 @@ async def login_firebase(request: Request, body: FirebaseBody):
                   user_id=result["user"]["id"])
     if result.get("mfa_required"):
         return {"mfa_required": True, "mfa_token": result["mfa_token"]}
-    return {**_login_success(result, ip), "is_new": result.get("is_new", False)}
+    return _session_response({**_login_success(result, ip), "is_new": result.get("is_new", False)},
+                             result["refresh_token"])
 
 
 @app.post("/api/auth/2fa/login")
@@ -357,7 +368,7 @@ async def login_second_factor(request: Request, body: MfaLoginBody):
     except AuthError as exc:
         log_event("login_failed", {"ip_address": ip, "reason": exc.code}, user_id=None)
         raise HTTPException(status_code=exc.status, detail=str(exc))
-    return _login_success(session, ip)
+    return _session_response(_login_success(session, ip), session["refresh_token"])
 
 
 @app.post("/api/auth/logout")
@@ -365,21 +376,27 @@ async def logout(request: Request):
     user = current_user(request)
     accounts_service.sign_out(user["session_id"])
     log_event("logout", {}, user_id=user["user_id"])
-    return {"ok": True}
+    response = JSONResponse(content={"ok": True})
+    response.delete_cookie(REFRESH_COOKIE, path="/api/auth", httponly=True, secure=config.COOKIE_SECURE,
+                           samesite="strict")
+    return response
 
 
 @app.post("/api/auth/refresh")
 @limiter.limit("30 per minute")
-async def refresh(request: Request, body: RefreshBody):
+async def refresh(request: Request, body: Optional[RefreshBody] = None):
+    raw = request.cookies.get(REFRESH_COOKIE) or (body.refresh_token if body else None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Token refresh failed")
     try:
-        session = accounts_service.refresh(body.refresh_token)
+        session = accounts_service.refresh(raw)
     except AuthError as exc:
         if exc.code == "refresh_reuse":
             log_event("refresh_token_reuse", {"ip_address": request.client.host if request.client else "unknown"},
                       user_id=None)
         raise HTTPException(status_code=401, detail="Token refresh failed")
-    return {"access_token": session["access_token"], "refresh_token": session["refresh_token"],
-            "expires_in": session["expires_in"]}
+    return _session_response({"access_token": session["access_token"], "expires_in": session["expires_in"]},
+                             session["refresh_token"])
 
 
 @app.get("/api/auth/me")
@@ -1093,6 +1110,19 @@ async def get_job(job_id: str, request: Request):
     return public_job(job)
 
 
+@app.post("/api/jobs/{job_id}/ws-ticket")
+@limiter.limit("60 per minute")
+async def job_ws_ticket(job_id: str, request: Request):
+    validate_uuid(job_id, "job_id")
+    user = current_user(request)
+    svc = get_service_client()
+    r = svc.table("wipe_jobs").select("user_id,org_id").eq("id", job_id).maybe_single().execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+    assert_job_access(r.data, user["user_id"], svc)
+    return {"ticket": realtime.issue_ticket(user["user_id"], job_id), "expires_in": realtime.TICKET_TTL}
+
+
 @app.post("/api/jobs/{job_id}/approve")
 async def approve_job(job_id: str, request: Request, body: ApproveBody):
     validate_uuid(job_id, "job_id")
@@ -1523,7 +1553,7 @@ async def change_role(org_id: str, user_id: str, request: Request, body: RoleBod
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/jobs/{job_id}")
-async def job_websocket(websocket: WebSocket, job_id: str, token: str = Query(...)):
+async def job_websocket(websocket: WebSocket, job_id: str, ticket: str = Query(...)):
     # Validate UUID before touching DB
     try:
         validate_uuid(job_id, "job_id")
@@ -1531,12 +1561,11 @@ async def job_websocket(websocket: WebSocket, job_id: str, token: str = Query(..
         await websocket.close(code=4000, reason="Invalid job_id format")
         return
 
-    payload = validate_token(token)
-    if not payload:
-        await websocket.close(code=4001, reason="Invalid or expired token")
+    user_id = realtime.redeem_ticket(ticket, job_id)
+    if not user_id:
+        await websocket.close(code=4001, reason="Invalid or expired ticket")
         return
 
-    user_id = payload.get("sub")
     svc     = get_service_client()
 
     job_r = svc.table("wipe_jobs").select("user_id,org_id").eq("id", job_id).maybe_single().execute()

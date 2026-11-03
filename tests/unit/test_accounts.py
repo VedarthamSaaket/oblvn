@@ -200,12 +200,20 @@ def test_auth_http_flow(fake_db, outbox, monkeypatch):
         assert v.status_code == 303 and v.headers["location"].endswith("/app/login?verified=1")
         bad = client.post("/api/auth/login", json={"email": "flow@b.io", "password": "Wrong-Pass-1!"})
         assert bad.status_code == 401 and bad.json()["detail"] == "Invalid login credentials"
-        ok = client.post("/api/auth/login", json={"email": "flow@b.io", "password": PW}).json()
+        resp = client.post("/api/auth/login", json={"email": "flow@b.io", "password": PW})
+        ok = resp.json()
+        assert "refresh_token" not in ok
+        cookie = resp.headers["set-cookie"].lower()
+        assert "oblvn_refresh=" in cookie and "httponly" in cookie and "samesite=strict" in cookie and "path=/api/auth" in cookie
+        old_refresh = client.cookies.get("oblvn_refresh")
         auth = {"Authorization": f"Bearer {ok['access_token']}"}
         assert client.get("/api/auth/me", headers=auth).json()["email"] == "flow@b.io"
-        new = client.post("/api/auth/refresh", json={"refresh_token": ok["refresh_token"]}).json()
-        assert client.post("/api/auth/refresh", json={"refresh_token": ok["refresh_token"]}).status_code == 401
+        new = client.post("/api/auth/refresh").json()
+        assert "refresh_token" not in new and client.cookies.get("oblvn_refresh") != old_refresh
+        client.cookies.clear()
+        assert client.post("/api/auth/refresh", json={"refresh_token": old_refresh}).status_code == 401
         assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {new['access_token']}"}).status_code == 401
+        assert client.post("/api/auth/refresh").status_code == 401
         events = [e["event_type"] for e in fake_db.tables["audit_log"]]
         assert "user_registered" in events and "email_verified" in events and "login_failed" in events
         assert "refresh_token_reuse" in events
