@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+{{ font_faces | safe }}
+
+:root {
+  --ink: #1a2218;
+  --ink-mid: #1f2a1d;
+  --moss: #2e3a2b;
+  --sage: #4a5442;
+  --cream: #f5e6c8;
+  --cream-2: #ede0c4;
+  --cream-dark: #d4c9a8;
+  --parchment: #c4b48a;
+  --serif: 'Playfair Display', serif;
+  --script: 'Cormorant Garamond', serif;
+  --sans: 'DM Sans', sans-serif;
+  --mono: 'IBM Plex Mono', monospace;
+  --ink-line: rgba(240, 235, 224, 0.06);
+}
+
+@page {
+  size: 297mm 210mm;
+  margin: 0;
+  background: #1a2218;
+}
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 297mm;
+  height: 210mm;
+  background: var(--ink);
+  color: var(--cream);
+  font-family: var(--sans);
+}
+
+.page {
+  position: relative;
+  width: 297mm;
+  height: 210mm;
+  overflow: hidden;
+}
+
+nav {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 80px;
+  padding: 0 52px;
+  border-bottom: 1px solid var(--ink-line);
+  background: var(--ink);
+}
+
+.brand {
+  position: absolute;
+  left: 52px;
+  top: 26px;
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  color: var(--cream);
+}
+
+.nav-items {
+  position: absolute;
+  right: 52px;
+  top: 34px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(240,235,224,0.28);
+}
+
+.nav-items span { margin-left: 28px; }
+.nav-items .active { color: var(--cream); }
+
+.artwork {
+  position: absolute;
+  top: 80px;
+  right: 0;
+  width: 380px;
+  bottom: 0;
+  background-color: var(--ink);
+  background-image: url('{{ artwork_uri }}');
+  background-repeat: no-repeat;
+  background-size: 380px 820px;
+  background-position: center center;
+}
+
+.content {
+  position: absolute;
+  top: 80px;
+  left: 0;
+  right: 380px;
+  bottom: 0;
+  padding: 40px 52px 0 52px;
+}
+
+.section-rule {
+  display: table;
+  width: 100%;
+  margin-bottom: 22px;
+}
+
+.section-rule > span { display: table-cell; vertical-align: middle; white-space: nowrap; }
+
+.section-rule .label {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(240,235,224,0.22);
+  padding-right: 20px;
+}
+
+.section-rule .line {
+  width: 100%;
+  background-image: linear-gradient(rgba(240,235,224,0.07), rgba(240,235,224,0.07));
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: left center;
+}
+
+.section-rule .num {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 18px;
+  color: rgba(240,235,224,0.18);
+  padding-left: 20px;
+}
+
+h2 {
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 46px;
+  line-height: 0.9;
+  letter-spacing: -0.02em;
+  margin-bottom: 22px;
+  color: var(--cream);
+}
+
+h2 em {
+  font-style: italic;
+  font-weight: 900;
+  color: rgba(240,235,224,0.5);
+}
+
+.card {
+  padding: 20px 24px 18px 24px;
+  border: 1px solid rgba(240,235,224,0.08);
+  background: rgba(240,235,224,0.02);
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.card-brand {
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+  color: var(--cream);
+}
+
+.badge-wrap {
+  position: relative;
+}
+
+.badge-shadow {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  right: -3px;
+  bottom: -3px;
+  background: var(--sage);
+}
+
+.badge {
+  position: relative;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--cream);
+  padding: 9px 20px;
+}
+
+.badge.muted {
+  color: var(--cream);
+  background: transparent;
+  border: 1px solid rgba(240,235,224,0.25);
+  box-shadow: none;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: 135px 135px 135px 135px;
+  column-gap: 16px;
+  row-gap: 11px;
+  margin-bottom: 14px;
+}
+
+.field { min-width: 0; }
+.field.span2 { grid-column: span 2; }
+.field.span3 { grid-column: span 3; }
+
+.field .k {
+  display: block;
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(240,235,224,0.25);
+  margin-bottom: 4px;
+}
+
+.field .v {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--cream);
+  letter-spacing: 0.04em;
+  word-break: break-all;
+}
+
+.field .v.accent { color: var(--parchment); }
+
+.hash {
+  background: rgba(74,84,66,0.2);
+  padding: 10px 12px;
+  margin: 0 0 14px 0;
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.06em;
+  color: rgba(240,235,224,0.4);
+  word-break: break-all;
+  line-height: 1.7;
+}
+
+.proof {
+  display: flex;
+  align-items: center;
+}
+
+.qr {
+  width: 64px;
+  height: 64px;
+  border: 1px solid rgba(240,235,224,0.12);
+  margin-right: 18px;
+}
+
+.proof .k {
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(240,235,224,0.25);
+  margin-bottom: 4px;
+}
+
+.proof .url {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--parchment);
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.proof .note {
+  font-family: var(--script);
+  font-style: italic;
+  font-size: 13px;
+  color: rgba(240,235,224,0.45);
+}
+
+footer {
+  position: absolute;
+  left: 52px;
+  right: 432px;
+  bottom: 22px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(240,235,224,0.06);
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(240,235,224,0.18);
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <nav>
+    <div class="brand">OBLVN</div>
+    <div class="nav-items">
+      <span>Certificate of Destruction</span><span class="active">{{ cert_id }}</span>
+    </div>
+  </nav>
+
+  <div class="content">
+    <div class="section-rule">
+      <span class="label">Certificates of Destruction</span>
+      <span class="line"></span>
+      <span class="num">03</span>
+    </div>
+
+    <h2>Proof of<br><em>Obliteration.</em></h2>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-brand">OBLVN</div>
+        <div class="badge-wrap">
+          {% if verified %}<div class="badge-shadow"></div>{% endif %}
+          <div class="badge{% if not verified %} muted{% endif %}">{{ badge }}</div>
+        </div>
+      </div>
+
+      <div class="fields">
+        {% for f in fields %}
+        <div class="field{% if f.span %} span{{ f.span }}{% endif %}">
+          <span class="k">{{ f.label }}</span>
+          <span class="v{% if f.accent %} accent{% endif %}">{{ f.value }}</span>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="hash">SHA-256 {{ sha256 }}</div>
+
+      <div class="proof">
+        <img class="qr" src="data:image/png;base64,{{ qr_b64 }}" alt="">
+        <div>
+          <div class="k">Verify independently</div>
+          <div class="url">{{ verify_url }}</div>
+          <div class="k">OpenTimestamps &middot; Bitcoin anchor</div>
+          <div class="note">{{ ots_status }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span>GDPR &middot; HIPAA &middot; NIST 800-88 &middot; ISO 27001</span>
+    <span>&copy; {{ year }} OBLVN</span>
+  </footer>
+
+  <div class="artwork"></div>
+</div>
+</body>
+</html>

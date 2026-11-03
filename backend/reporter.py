@@ -4,10 +4,12 @@ import io
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import qrcode
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from backend.config import config
-from backend.platform_env import font_face, weasy_html
+from backend.platform_env import FONT_DIR, weasy_html
 from backend.timestamps import stamp_certificate
 
 
@@ -24,7 +26,7 @@ def _get_qr_base64(url: str) -> str:
     )
     qr.add_data(url)
     qr.make(fit=True)
-    img = qr.make_image(fill_color="#c4b48a", back_color="#1a2218")
+    img = qr.make_image(fill_color="#f5e6c8", back_color="#1a2218")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode("utf-8")
@@ -56,398 +58,95 @@ def _verification_method(v: dict | None) -> str | None:
     return v.get("reason") or check
 
 
-def _generate_html(cert: dict, qr_b64: str) -> str:
-    cert_id       = cert.get("certificate_id", "")
-    issued_at     = cert.get("issued_at", "")
-    device_model  = cert.get("device_model", "—")
-    device_serial = cert.get("device_serial", "—")
-    device_type   = (cert.get("device_type") or "").upper() or "—"
-    capacity      = cert.get("device_capacity_human") or _human_bytes(cert.get("device_capacity_bytes", 0))
-    wipe_method   = (cert.get("wipe_method") or "").replace("_", " ").title()
-    wipe_standard = (cert.get("wipe_standard") or "").upper().replace("_", " ")
-    passes        = str(cert.get("passes_completed", 0))
-    verified      = cert.get("verification_passed")
-    verify_status = "Passed" if verified else "Failed" if verified is False else "Not verifiable"
-    technique     = (cert.get("sanitize_technique") or "—").replace("_", " ").replace("+", " + ")
-    nist_category = {"purge": "Purge", "clear": "Clear", "none": "None (not a NIST sanitize)",
-                     "not_applicable": "File level (not a media sanitize)"}.get(cert.get("nist_800_88_category"), "—")
-    verify_method = cert.get("verification_method") or "—"
-    operator      = cert.get("operator_name", "—")
-    org           = cert.get("organisation_name") or "—"
-    sha256        = cert.get("sha256_hash", "")
-    verify_url    = cert.get("verify_url", "")
-    ots           = cert.get("ots_result") or {}
+FAMILIES = {
+    "PlayfairDisplay": "Playfair Display",
+    "CormorantGaramond": "Cormorant Garamond",
+    "DMSans": "DM Sans",
+    "IBMPlexMono": "IBM Plex Mono",
+}
+TEMPLATES = Path(__file__).resolve().parent / "templates"
+ARTWORK = Path(__file__).resolve().parent / "assets" / "artwork_panel.png"
+NIST_LABELS = {
+    "purge": "Purge",
+    "clear": "Clear",
+    "none": "None (not a NIST sanitize)",
+    "not_applicable": "File level",
+}
 
+
+def _font_faces() -> str:
+    rules = []
+    for path in sorted(FONT_DIR.glob("*.ttf")):
+        parts = path.stem.split("-")
+        if len(parts) != 3 or parts[0] not in FAMILIES:
+            continue
+        family, weight, style = FAMILIES[parts[0]], parts[1], parts[2]
+        rules.append(
+            f"@font-face {{ font-family: '{family}'; src: url('{path.as_uri()}'); "
+            f"font-weight: {weight}; font-style: {style}; }}"
+        )
+    return "\n".join(rules)
+
+
+def _issued_display(issued_at: str) -> str:
+    try:
+        return datetime.fromisoformat(issued_at).strftime("%d %b %Y %H:%M UTC")
+    except (TypeError, ValueError):
+        return issued_at or ""
+
+
+def _clip(text: str, limit: int = 64) -> str:
+    if len(text) <= limit:
+        return text
+    head = (limit - 1) // 2
+    return f"{text[:head]}\u2026{text[-(limit - 1 - head):]}"
+
+
+def _ots_status(ots: dict) -> str:
+    if ots.get("error"):
+        return f"Anchor unavailable: {ots['error']}"
     if ots.get("pending"):
-        ots_status = "Pending block confirmation (~1 hr)"
-    elif ots.get("error"):
-        ots_status = ots.get("error")
-    else:
-        ots_status = "Immutable blockchain proof anchored"
+        return "Submitted, pending Bitcoin block confirmation (about 1 hour)"
+    return "Immutable blockchain proof anchored"
 
-    font_faces = "\n".join(filter(None, [
-        font_face("Playfair Display", "PlayfairDisplay-Bold.ttf", 700),
-        font_face("IBM Plex Mono", "IBMPlexMono-Regular.ttf", 400),
-        font_face("IBM Plex Mono", "IBMPlexMono-Bold.ttf", 700),
-    ]))
 
-    ots_block = ""
-    if ots:
-        ots_block = f"""
-        <div class="ots-block">
-            <span class="ots-icon">&#x20BF;</span>
-            <div>
-                <div class="ots-label">Bitcoin Anchored via OpenTimestamps</div>
-                <div class="ots-status">{ots_status}</div>
-            </div>
-        </div>"""
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<style>
-  /* ── Fonts ───────────────────────────────────────────── */
-  {font_faces}
-
-  /* ── Page ────────────────────────────────────────────── */
-  @page {{
-    size: A4;
-    margin: 48pt 44pt;
-    background: #1a2218;
-
-    @bottom-left {{
-      content: "Obliteration verified.";
-      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-      font-style: italic;
-      font-size: 9pt;
-      color: #c4b48a;
-    }}
-    @bottom-right {{
-      content: "GDPR Art.\00a017\2002\2022\2002HIPAA \00a7164.310\2002\2022\2002NIST 800-88\2002\2022\2002ISO 27001\2002\2022\2002DoD 5220.22-M";
-      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-      font-size: 5.5pt;
-      letter-spacing: 0.06em;
-      color: rgba(240,235,224,0.14);
-    }}
-  }}
-
-  /* ── Reset ───────────────────────────────────────────── */
-  *, *::before, *::after {{ margin: 0; padding: 0; box-sizing: border-box; }}
-
-  /* ── Design tokens ───────────────────────────────────── */
-  :root {{
-    --ink:       #1a2218;
-    --ink-mid:   #1f2a1d;
-    --moss:      #2e3a2b;
-    --sage:      #4a5442;
-    --cream:     #f5e6c8;
-    --parchment: #c4b48a;
-    --serif:     'Playfair Display', Georgia, 'Times New Roman', serif;
-    --mono:      'IBM Plex Mono', 'Courier New', monospace;
-    --sans:      'Helvetica Neue', Helvetica, Arial, sans-serif;
-  }}
-
-  body {{
-    font-family: var(--mono);
-    background: var(--ink);
-    color: var(--cream);
-    font-size: 9pt;
-    line-height: 1.5;
-  }}
-
-  /* ── Top accent stripe ───────────────────────────────── */
-  .stripe {{
-    display: flex;
-    height: 4pt;
-    margin-bottom: 36pt;
-    margin-left:  -44pt;
-    margin-right: -44pt;
-  }}
-  .stripe-1 {{ flex: 2; background: rgba(74,84,66,0.90); }}
-  .stripe-2 {{ flex: 1; background: rgba(240,235,224,0.18); }}
-  .stripe-3 {{ flex: 3; background: rgba(74,84,66,0.55); }}
-  .stripe-4 {{ flex: 1; background: rgba(196,180,138,0.45); }}
-
-  /* ── Brand ───────────────────────────────────────────── */
-  .brand {{
-    margin-bottom: 28pt;
-  }}
-  .brand-name {{
-    font-family: var(--serif);
-    font-size: 38pt;
-    font-weight: 700;
-    color: var(--cream);
-    letter-spacing: -0.01em;
-    line-height: 1;
-    margin-bottom: 6pt;
-  }}
-  .brand-tagline {{
-    font-family: var(--sans);
-    font-size: 5.5pt;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: rgba(240,235,224,0.22);
-    margin-bottom: 18pt;
-  }}
-  .doc-title {{
-    font-family: var(--sans);
-    font-style: italic;
-    font-size: 17pt;
-    font-weight: 300;
-    color: rgba(240,235,224,0.48);
-  }}
-
-  /* ── ID rule ─────────────────────────────────────────── */
-  .id-rule {{
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    border-bottom: 0.5pt solid rgba(240,235,224,0.08);
-    padding-bottom: 5pt;
-    margin-bottom: 26pt;
-  }}
-  .cert-id-label {{
-    font-size: 6pt;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: rgba(240,235,224,0.16);
-  }}
-
-  /* ── Two-column data grid ────────────────────────────── */
-  .grid {{
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: 36pt;
-    row-gap: 18pt;
-    margin-bottom: 32pt;
-  }}
-  .field-label {{
-    font-family: var(--sans);
-    font-size: 5.5pt;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: rgba(240,235,224,0.20);
-    margin-bottom: 3pt;
-  }}
-  .field-value {{
-    font-family: var(--mono);
-    font-size: 9pt;
-    color: var(--cream);
-    line-height: 1.35;
-  }}
-
-  /* ── Section divider ─────────────────────────────────── */
-  .section-rule {{
-    border: none;
-    border-top: 0.5pt solid rgba(240,235,224,0.06);
-    margin: 22pt 0;
-  }}
-
-  /* ── Hash block ──────────────────────────────────────── */
-  .hash-block {{
-    background: rgba(74,84,66,0.18);
-    border-left: 2.5pt solid rgba(74,84,66,0.60);
-    padding: 12pt 14pt;
-    margin-bottom: 14pt;
-  }}
-  .hash-label {{
-    font-family: var(--sans);
-    font-size: 5.5pt;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: rgba(240,235,224,0.20);
-    margin-bottom: 7pt;
-  }}
-  .hash-value {{
-    font-family: var(--mono);
-    font-size: 7pt;
-    color: rgba(240,235,224,0.40);
-    word-break: break-all;
-    line-height: 1.6;
-  }}
-
-  /* ── OTS block ───────────────────────────────────────── */
-  .ots-block {{
-    display: flex;
-    align-items: flex-start;
-    gap: 12pt;
-    background: rgba(46,58,43,0.38);
-    border-left: 2.5pt solid rgba(196,180,138,0.48);
-    padding: 10pt 14pt;
-    margin-bottom: 14pt;
-  }}
-  .ots-icon {{
-    font-size: 13pt;
-    color: var(--parchment);
-    flex-shrink: 0;
-    line-height: 1;
-    margin-top: 1pt;
-  }}
-  .ots-label {{
-    font-family: var(--sans);
-    font-size: 6pt;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: rgba(196,180,138,0.75);
-    margin-bottom: 3pt;
-  }}
-  .ots-status {{
-    font-family: var(--mono);
-    font-size: 8pt;
-    color: rgba(196,180,138,0.55);
-  }}
-
-  /* ── QR / verify block ───────────────────────────────── */
-  .qr-block {{
-    display: flex;
-    align-items: center;
-    gap: 18pt;
-    border: 0.5pt solid rgba(240,235,224,0.07);
-    background: rgba(240,235,224,0.02);
-    padding: 14pt;
-    margin-bottom: 24pt;
-  }}
-  .qr-img {{
-    width: 72pt;
-    height: 72pt;
-    flex-shrink: 0;
-  }}
-  .qr-title {{
-    font-family: var(--sans);
-    font-size: 5.5pt;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: rgba(240,235,224,0.20);
-    margin-bottom: 5pt;
-  }}
-  .qr-url {{
-    font-family: var(--mono);
-    font-size: 7.5pt;
-    color: var(--parchment);
-    margin-bottom: 5pt;
-    word-break: break-all;
-  }}
-  .qr-desc {{
-    font-family: var(--sans);
-    font-size: 6.5pt;
-    color: rgba(240,235,224,0.18);
-    line-height: 1.7;
-  }}
-</style>
-</head>
-<body>
-
-  <!-- Accent stripe -->
-  <div class="stripe">
-    <div class="stripe-1"></div>
-    <div class="stripe-2"></div>
-    <div class="stripe-3"></div>
-    <div class="stripe-4"></div>
-  </div>
-
-  <!-- Brand -->
-  <div class="brand">
-    <div class="brand-name">OBLVN</div>
-    <div class="brand-tagline">Secure Data Obliteration Platform</div>
-    <div class="doc-title">Certificate of Destruction</div>
-  </div>
-
-  <!-- ID rule -->
-  <div class="id-rule">
-    <span class="cert-id-label">{cert_id}</span>
-  </div>
-
-  <!-- Data grid -->
-  <div class="grid">
-    <div>
-      <div class="field-label">Certificate ID</div>
-      <div class="field-value">{cert_id}</div>
-    </div>
-    <div>
-      <div class="field-label">Issued At (UTC)</div>
-      <div class="field-value">{issued_at}</div>
-    </div>
-    <div>
-      <div class="field-label">Device Model</div>
-      <div class="field-value">{device_model}</div>
-    </div>
-    <div>
-      <div class="field-label">Device Serial</div>
-      <div class="field-value">{device_serial}</div>
-    </div>
-    <div>
-      <div class="field-label">Device Type</div>
-      <div class="field-value">{device_type}</div>
-    </div>
-    <div>
-      <div class="field-label">Capacity</div>
-      <div class="field-value">{capacity}</div>
-    </div>
-    <div>
-      <div class="field-label">Wipe Method</div>
-      <div class="field-value">{wipe_method}</div>
-    </div>
-    <div>
-      <div class="field-label">Standard Applied</div>
-      <div class="field-value">{wipe_standard}</div>
-    </div>
-    <div>
-      <div class="field-label">Passes Completed</div>
-      <div class="field-value">{passes}</div>
-    </div>
-    <div>
-      <div class="field-label">Sanitize Technique</div>
-      <div class="field-value">{technique}</div>
-    </div>
-    <div>
-      <div class="field-label">NIST 800-88 Category</div>
-      <div class="field-value">{nist_category}</div>
-    </div>
-    <div>
-      <div class="field-label">Verification Read-back</div>
-      <div class="field-value">{verify_status}</div>
-    </div>
-    <div>
-      <div class="field-label">Verification Method</div>
-      <div class="field-value">{verify_method}</div>
-    </div>
-    <div>
-      <div class="field-label">Operator</div>
-      <div class="field-value">{operator}</div>
-    </div>
-    <div>
-      <div class="field-label">Organisation</div>
-      <div class="field-value">{org}</div>
-    </div>
-  </div>
-
-  <hr class="section-rule" />
-
-  <!-- SHA-256 hash -->
-  <div class="hash-block">
-    <div class="hash-label">SHA-256 &middot; Wipe Fingerprint</div>
-    <div class="hash-value">{sha256[:32]}<br />{sha256[32:]}</div>
-  </div>
-
-  <!-- OTS (conditional) -->
-  {ots_block}
-
-  <!-- QR verify -->
-  <div class="qr-block">
-    <img class="qr-img" src="data:image/png;base64,{qr_b64}" alt="Verify QR" />
-    <div>
-      <div class="qr-title">Verify this certificate independently</div>
-      <div class="qr-url">{verify_url}</div>
-      <div class="qr-desc">
-        Scan QR or visit the URL above to verify the wipe fingerprint.<br />
-        This proof persists on the Bitcoin blockchain even if OBLVN goes offline.
-      </div>
-    </div>
-  </div>
-
-</body>
-</html>"""
+def _generate_html(cert: dict, qr_b64: str) -> str:
+    verified = cert.get("verification_passed")
+    dash = "\u2014"
+    fields = [
+        {"label": "Device", "value": _clip(cert.get("device_model") or dash), "span": 2},
+        {"label": "Serial", "value": _clip(cert.get("device_serial") or dash), "span": 2},
+        {"label": "Type", "value": (cert.get("device_type") or dash).replace("_", " ").upper()},
+        {"label": "Capacity", "value": cert.get("device_capacity_human") or _human_bytes(cert.get("device_capacity_bytes", 0))},
+        {"label": "Method", "value": (cert.get("wipe_method") or dash).replace("_", " ")},
+        {"label": "Standard", "value": (cert.get("wipe_standard") or dash).replace("_", " ").upper()},
+        {"label": "Technique", "value": (cert.get("sanitize_technique") or dash).replace("_", " ").replace("+", " + "), "span": 2},
+        {"label": "NIST 800-88", "value": NIST_LABELS.get(cert.get("nist_800_88_category"), dash), "accent": True},
+        {"label": "Passes", "value": str(cert.get("passes_completed", 0))},
+        {"label": "Verification", "value": "Passed" if verified else "Failed" if verified is False else "Not verifiable",
+         "accent": True},
+        {"label": "Read-back", "value": cert.get("verification_method") or dash, "span": 2},
+        {"label": "Issued", "value": _issued_display(cert.get("issued_at", ""))},
+        {"label": "Operator", "value": cert.get("operator_name") or dash, "span": 2},
+        {"label": "Organisation", "value": cert.get("organisation_name") or dash},
+        {"label": "Approver", "value": cert.get("approver_name") or dash},
+    ]
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=select_autoescape(["html"]))
+    issued = cert.get("issued_at", "")
+    return env.get_template("certificate.html").render(
+        font_faces=_font_faces(),
+        artwork_uri=ARTWORK.as_uri(),
+        cert_id=cert.get("certificate_id", ""),
+        badge="Dry run · no data destroyed" if cert.get("dry_run") else
+              "Obliteration verified" if verified else "Unverified read-back",
+        verified=bool(verified) and not cert.get("dry_run"),
+        fields=fields,
+        sha256=cert.get("sha256_hash", ""),
+        verify_url=cert.get("verify_url", ""),
+        ots_status=_ots_status(cert.get("ots_result") or {}),
+        qr_b64=qr_b64,
+        year=(issued or "")[:4] or datetime.now(timezone.utc).year,
+    )
 
 
 def generate_certificate(
