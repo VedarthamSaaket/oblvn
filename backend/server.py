@@ -404,6 +404,17 @@ async def logout(request: Request):
     return response
 
 
+@app.post("/api/auth/logout-all")
+async def logout_everywhere(request: Request):
+    user = current_user(request)
+    accounts_service.revoke_all(user["user_id"], "sign_out_everywhere")
+    log_event("logout_everywhere", {}, user_id=user["user_id"])
+    response = JSONResponse(content={"ok": True})
+    response.delete_cookie(REFRESH_COOKIE, path="/api/auth", httponly=True, secure=config.COOKIE_SECURE,
+                           samesite="strict")
+    return response
+
+
 @app.post("/api/auth/refresh")
 @limiter.limit("30 per minute")
 async def refresh(request: Request, body: Optional[RefreshBody] = None):
@@ -1028,16 +1039,19 @@ async def create_job(request: Request):
         except PathRejected as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         total_bytes = 0
+        file_count = 0
         for p in file_paths:
             if os.path.isfile(p):
                 total_bytes += os.path.getsize(p)
+                file_count += 1
             else:
                 for root_dir, _dirs, names in os.walk(p):
-                    total_bytes += sum(os.path.getsize(os.path.join(root_dir, n)) for n in names
-                                       if os.path.isfile(os.path.join(root_dir, n)))
+                    found = [os.path.join(root_dir, n) for n in names if os.path.isfile(os.path.join(root_dir, n))]
+                    total_bytes += sum(os.path.getsize(f) for f in found)
+                    file_count += len(found)
         device = {
             "serial":         _file_serial_label(data, file_paths),
-            "model":          _file_model_label(data, file_paths),
+            "model":          _file_model_label(data, file_paths, file_count),
             "capacity_bytes": total_bytes,
             "device_type":    "file",
             "node":           file_paths[0],
@@ -1705,13 +1719,16 @@ def _file_serial_label(data: dict, file_paths: list[str]) -> str:
     return f"{count} item{'s' if count != 1 else ''}"
 
 
-def _file_model_label(data: dict, file_paths: list[str]) -> str:
+def _file_model_label(data: dict, file_paths: list[str], file_count: int | None = None) -> str:
     if data.get("device_model"):
-        return data["device_model"]
+        return str(data["device_model"])[:255]
     sources = data.get("sources") or []
     folders = [s for s in sources if s.get("type") == "folder"]
     files = [s for s in sources if s.get("type") == "file"]
-    count = len(file_paths)
+    count = file_count if file_count is not None else len(file_paths)
+    if not sources and len(file_paths) == 1 and os.path.isdir(file_paths[0]):
+        name = file_paths[0].replace("\\", "/").rstrip("/").split("/")[-1]
+        return f"Folder Wipe — {name} ({count} file{'s' if count != 1 else ''})"
     if folders and not files:
         if len(folders) == 1:
             name = folders[0]["path"].replace("\\", "/").rstrip("/").split("/")[-1]

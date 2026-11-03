@@ -108,12 +108,17 @@ export function AuthProvider({ children }) {
         clearAuth()
     }
 
+    async function logoutEverywhere() {
+        await api.auth.logoutAll().catch(() => { })
+        clearAuth()
+    }
+
     async function resetPassword(email) {
         return api.auth.resetPassword(email)
     }
 
     return (
-        <AuthCtx.Provider value={{ user, loading, login, loginWithGoogle, completeMfa, register, logout, resetPassword }}>
+        <AuthCtx.Provider value={{ user, loading, login, loginWithGoogle, completeMfa, register, logout, logoutEverywhere, resetPassword }}>
             {children}
         </AuthCtx.Provider>
     )

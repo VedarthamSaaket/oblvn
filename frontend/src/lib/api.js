@@ -162,6 +162,13 @@ export const api = {
       return promise
     },
 
+    logoutAll: () => {
+      const promise = req('POST', '/auth/logout-all').catch(() => { })
+      clearSession()
+      signOutOfFirebase().catch(() => { })
+      return promise
+    },
+
     refresh: attemptRefresh,
 
     resetPassword: (email) =>

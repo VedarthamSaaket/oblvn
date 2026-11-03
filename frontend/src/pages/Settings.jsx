@@ -123,7 +123,7 @@ function SectionHeading({ label }) {
 }
 
 export default function Settings() {
-  const { user, logout } = useAuth()
+  const { user, logoutEverywhere } = useAuth()
   const toast = useToast()
 
   const [notifications, setNotifications] = useState({ wipeComplete: true, anomalyAlert: true, approvalRequired: true, chainVerificationFail: true, weeklyReport: false, loginAlert: true })
@@ -218,7 +218,7 @@ export default function Settings() {
           <div style={{ fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.1em', color: 'rgba(240,235,224,0.3)', lineHeight: 1.85, marginBottom: 20 }}>
             Invalidates all active sessions. You will be signed out immediately.
           </div>
-          <button onClick={logout} style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.2em', textTransform: 'uppercase', color: '#c44a42', background: 'rgba(196,74,66,0.08)', border: '1px solid rgba(196,74,66,0.3)', padding: '10px 22px', cursor: 'crosshair', transition: 'all 0.15s' }}
+          <button onClick={logoutEverywhere} style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.2em', textTransform: 'uppercase', color: '#c44a42', background: 'rgba(196,74,66,0.08)', border: '1px solid rgba(196,74,66,0.3)', padding: '10px 22px', cursor: 'crosshair', transition: 'all 0.15s' }}
             onMouseEnter={e => { e.currentTarget.style.background = 'rgba(196,74,66,0.16)' }}
             onMouseLeave={e => { e.currentTarget.style.background = 'rgba(196,74,66,0.08)' }}>
             Sign Out Everywhere
