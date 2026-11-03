@@ -1,10 +1,8 @@
-import math
 import random
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from ml import behaviour, drive_health, feedback, wipe_duration
 from ml.features import SMART_FEATURES, technique_family

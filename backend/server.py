@@ -28,10 +28,8 @@ Security changes applied (nothing stripped, no core functionality altered):
 
 import io
 import json
-import threading
 import os
 import asyncio
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional

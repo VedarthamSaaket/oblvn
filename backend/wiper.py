@@ -6,7 +6,7 @@ import time
 from collections.abc import Generator
 
 from backend.config import config
-from backend.hw.patterns import NIST_PASSES, STANDARDS, passes_for
+from backend.hw.patterns import passes_for
 
 
 def _is_usb_write_protected() -> bool:
