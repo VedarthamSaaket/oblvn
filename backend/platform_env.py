@@ -32,7 +32,37 @@ def font_face(family: str, filename: str, weight: int) -> str:
     return f"@font-face {{ font-family: '{family}'; src: url('{path.as_uri()}'); font-weight: {weight}; }}"
 
 
+ALLOWED_FETCH_ROOTS = (PROJECT_ROOT / "backend" / "assets", PROJECT_ROOT / "backend" / "templates")
+
+
+def _fetcher_class():
+    from urllib.parse import unquote, urlparse
+    from weasyprint.urls import URLFetcher
+
+    class SafeURLFetcher(URLFetcher):
+        def __init__(self):
+            super().__init__(allowed_protocols={"file", "data"})
+
+        def fetch(self, url, headers=None):
+            parsed = urlparse(url)
+            if parsed.scheme == "file":
+                path = Path(unquote(parsed.path)).resolve()
+                roots = [r.resolve() for r in ALLOWED_FETCH_ROOTS] + [FONT_DIR.resolve()]
+                if not any(path == r or r in path.parents for r in roots):
+                    raise ValueError("blocked file outside OBLVN assets while rendering PDF")
+            elif parsed.scheme != "data":
+                raise ValueError(f"blocked {parsed.scheme or 'relative'} URL while rendering PDF")
+            return super().fetch(url, headers)
+
+    return SafeURLFetcher
+
+
+def safe_url_fetcher():
+    return _fetcher_class()()
+
+
 def weasy_html():
     configure_fontconfig()
+    from functools import partial
     from weasyprint import HTML
-    return HTML
+    return partial(HTML, url_fetcher=safe_url_fetcher())

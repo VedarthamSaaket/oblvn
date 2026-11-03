@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import html
 import io
 import json
 import threading
@@ -171,12 +172,12 @@ def export_pdf(org_id: str | None = None, start: str | None = None,
     rows_html = ""
     for e in entries:
         # Format columns
-        id_str = str(e.get("id", ""))
-        event_str = str(e.get("event_type", ""))[:25]
-        user_str = str(e.get("user_id", ""))[:32]
-        time_str = str(e.get("created_at", ""))[:19].replace("T", " ")
-        anomaly_str = str(e.get("anomaly_severity") or "")
-        hash_str = str(e.get("entry_hash", ""))[:32] + "..."
+        id_str = html.escape(str(e.get("id", "")))
+        event_str = html.escape(str(e.get("event_type", ""))[:25])
+        user_str = html.escape(str(e.get("user_id", ""))[:32])
+        time_str = html.escape(str(e.get("created_at", ""))[:19].replace("T", " "))
+        anomaly_str = html.escape(str(e.get("anomaly_severity") or ""))
+        hash_str = html.escape(str(e.get("entry_hash", ""))[:32]) + "..."
 
         # Apply alert class to the row if it's an anomaly
         row_class = "row-anomaly" if e.get("anomaly_severity") else "row-normal"
