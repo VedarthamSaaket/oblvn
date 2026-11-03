@@ -14,7 +14,7 @@ from backend.anomaly import check_smart_anomalies
 from backend.audit import log_event
 from backend.auth import current_user
 from backend.security import assert_org_membership, validate_uuid
-from backend.supabase_client import get_service_client
+from backend.db import get_service_client
 
 router = APIRouter(prefix="/api/agents")
 PAIR_TTL_SECONDS = 600

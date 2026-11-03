@@ -19,7 +19,7 @@ def test_dedupe_returns_existing_open_anomaly(fake_db):
     a = anomaly._record_anomaly("x", "low", None, {}, None, None, dedupe_key="k1")
     b = anomaly._record_anomaly("x", "low", None, {}, None, None, dedupe_key="k1")
     assert a["id"] == b["id"] and len(fake_db.tables["anomalies"]) == 1
-    fake_db.tables["anomalies"][0]["status"] = "resolved"
+    fake_db.svc.table("anomalies").update({"status": "resolved"}).eq("id", a["id"]).execute()
     anomaly._record_anomaly("x", "low", None, {}, None, None, dedupe_key="k1")
     assert len(fake_db.tables["anomalies"]) == 2
 
@@ -49,20 +49,22 @@ def test_off_hours_uses_org_timezone(fake_db):
 def test_new_operator_ignores_current_job(fake_db):
     fake_db.tables["wipe_jobs"] = [{"id": "j1", "user_id": USER}]
     assert anomaly.check_new_operator(USER, None, "j1")["anomaly_type"] == "new_operator_first_wipe"
-    fake_db.tables["wipe_jobs"].append({"id": "j2", "user_id": USER})
+    fake_db.tables.append("wipe_jobs", {"id": "j2", "user_id": USER})
     fake_db.tables["anomalies"] = []
     assert anomaly.check_new_operator(USER, None, "j2") is None
 
 
 def test_failed_logins_by_email_and_ip(fake_db):
     now = datetime.now(timezone.utc).isoformat()
-    fake_db.tables["audit_log"] = [
+    rows = [
         {"event_type": "login_failed", "created_at": now,
          "event_payload": {"email": f"u{i % 3}@x.io", "ip_address": "9.9.9.9"}} for i in range(12)
     ] + [{"event_type": "login_failed", "created_at": now,
           "event_payload": {"email": "a@x.io", "ip_address": "1.1.1.1"}} for _ in range(5)]
-    for i, row in enumerate(fake_db.tables["audit_log"]):
+    for i, row in enumerate(rows):
         row.update({"id": i + 1, "prev_entry_hash": f"{i:064d}", "entry_hash": f"{i + 1:064d}", "org_id": None})
+    fake_db.tables["audit_log"] = rows
+    fake_db.db.counters.insert_one({"_id": "audit_log", "seq": len(rows)})
     found = anomaly.check_failed_logins("a@x.io", None, "1.1.1.1")
     assert [f["anomaly_type"] for f in found] == ["brute_force_login"]
     stuffing = anomaly.check_failed_logins("u0@x.io", None, "9.9.9.9")

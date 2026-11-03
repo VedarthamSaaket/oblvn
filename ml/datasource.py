@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend.audit import fetch_all
-from backend.supabase_client import get_service_client
+from backend.db import get_service_client
 
 JOB_COLUMNS = (
     "id,user_id,org_id,status,method,standard,device_type,device_capacity_bytes,device_serial,"

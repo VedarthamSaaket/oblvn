@@ -54,7 +54,7 @@ def test_verify_endpoint_hides_unfinished_jobs(api, fake_db):
 
 def test_agent_end_to_end(api, fake_db, monkeypatch):
     from backend import jobs
-    fake_db.users[USER] = "op@example.com"
+    fake_db.add_user(USER, "op@example.com")
     monkeypatch.setattr(jobs, "generate_certificate", lambda job, user, org, approver, record: {
         "certificate_id": job["id"], "pdf_path": "/tmp/x.pdf", "ots_path": None,
         "fields": {"sha256_hash": "a" * 64, "verify_url": "http://x/verify"}})

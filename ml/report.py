@@ -18,7 +18,7 @@ def _previous_month(today: date) -> str:
 
 def _anomalies(org_id: str | None, month: str, user_id: str | None = None) -> list[dict]:
     from backend.audit import fetch_all
-    from backend.supabase_client import get_service_client
+    from backend.db import get_service_client
     svc = get_service_client()
     start = f"{month}-01T00:00:00+00:00"
     year, mon = map(int, month.split("-"))

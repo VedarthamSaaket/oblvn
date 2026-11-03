@@ -8,7 +8,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from backend.platform_env import weasy_html
-from backend.supabase_client import get_service_client
+from backend.db import get_service_client
 
 def _hash_entry(payload: dict, prev_hash: str) -> str:
     content = json.dumps(payload, sort_keys=True, separators=(",", ":")) + prev_hash

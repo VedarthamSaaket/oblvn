@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from backend.supabase_client import get_service_client
+from backend.db import get_service_client
 
 SEVERITY_WEIGHTS = {"low": 1, "medium": 3, "high": 7, "critical": 15}
 ACTIVE_STATUSES = ("open", "acknowledged")

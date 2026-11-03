@@ -12,7 +12,7 @@ def test_chain_appends_and_verifies(fake_db):
 def test_chain_detects_tampering(fake_db):
     for i in range(3):
         audit.log_event("evt", {"i": i}, user_id=None)
-    fake_db.tables["audit_log"][1]["event_payload"] = '{"i": 99}'
+    fake_db.db.audit_log.update_one({"_id": 2}, {"$set": {"event_payload": '{"i": 99}'}})
     result = audit.verify_chain(None)
     assert not result["intact"] and result["broken_at_entry"] == 1
 
