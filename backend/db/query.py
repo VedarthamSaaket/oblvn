@@ -74,6 +74,7 @@ class Query:
         self.op = "select"
         self.payload = None
         self.count_mode = None
+        self.columns: list[str] | None = None
         self.single = False
         self.sort: list[tuple] = []
         self.limit_n = None
@@ -87,8 +88,14 @@ class Query:
         self.filters.append({field: cond})
         return self
 
-    def select(self, *_columns, count=None):
+    def select(self, *columns, count=None):
         self.count_mode = count
+        names = [c.strip() for part in columns for c in str(part).split(",") if c.strip()]
+        if names and "*" not in names:
+            for n in names:
+                if n.startswith("$") or "\x00" in n:
+                    raise UnsafeValue("column names must be plain field names")
+            self.columns = names
         return self
 
     def insert(self, payload):
@@ -186,8 +193,13 @@ class Query:
                 raise DuplicateKey(errors[0].get("errmsg", "E11000")) from exc
             raise
 
+    def _projection(self) -> dict | None:
+        if not self.columns:
+            return None
+        return {self._field(c): 1 for c in self.columns}
+
     def _select(self) -> Response:
-        cursor = self.coll.find(self._query())
+        cursor = self.coll.find(self._query(), self._projection())
         if self.sort:
             cursor = cursor.sort(self.sort)
         if self.skip_n:
@@ -195,6 +207,9 @@ class Query:
         if self.limit_n is not None:
             cursor = cursor.limit(self.limit_n)
         rows = [_public(d, self.key) for d in cursor]
+        if self.columns:
+            keep = set(self.columns)
+            rows = [{k: v for k, v in r.items() if k in keep} for r in rows]
         count = self.coll.count_documents(self._query()) if self.count_mode else None
         if self.single:
             return Response(rows[0] if rows else None, count)
