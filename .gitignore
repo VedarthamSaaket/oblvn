@@ -152,3 +152,5 @@ ml/data/*
 !ml/data/.gitkeep
 ml/models/*
 !ml/models/.gitkeep
+__pycache__/
+*.pyc
