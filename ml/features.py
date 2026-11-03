@@ -2,6 +2,8 @@ import math
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ml import geo
+
 DEVICE_TYPES = ["hdd", "ssd", "nvme", "usb_flash", "file"]
 METHODS = ["binary_overwrite", "crypto_erase", "full_sanitization"]
 TRANSPORTS = ["nvme", "sata", "sas", "usb", "unknown"]
@@ -23,6 +25,7 @@ JOB_BEHAVIOUR_FEATURES = [
 LOGIN_FEATURES = [
     "hour_sin", "hour_cos", "dow_sin", "dow_cos", "new_ip", "new_subnet",
     "distinct_ips_30d", "failed_before_15m", "log_hours_since_last",
+    "new_country", "new_asn", "log_travel_kmh",
 ]
 
 SMART_IDS = [1, 3, 4, 5, 7, 9, 10, 12, 187, 188, 189, 190, 192, 193, 194, 196, 197, 198, 199, 240, 241, 242]
@@ -139,8 +142,14 @@ def login_row(at: datetime, ip: str | None, prior: list[dict], failed_before: in
     ips = [p["event_payload"].get("ip_address") for p in prior]
     month = [p["event_payload"].get("ip_address") for p in prior
              if (ts(p["created_at"]) and at - ts(p["created_at"]) <= timedelta(days=30))]
-    last = max((ts(p["created_at"]) for p in prior if ts(p["created_at"])), default=None)
+    dated = [p for p in prior if ts(p["created_at"])]
+    latest = max(dated, key=lambda p: ts(p["created_at"]), default=None)
+    last = ts(latest["created_at"]) if latest else None
     hours_since = (at - last).total_seconds() / 3600 if last else 24 * 30
+    here = geo.lookup(ip)
+    seen = [g for g in (geo.lookup(i) for i in ips) if g]
+    trip = geo.travel(geo.lookup(latest["event_payload"].get("ip_address")) if latest else None, here,
+                      hours_since) if latest else None
     return {
         "hour_sin": hs, "hour_cos": hc, "dow_sin": ds, "dow_cos": dc,
         "new_ip": 0.0 if not prior or ip in ips else 1.0,
@@ -148,6 +157,9 @@ def login_row(at: datetime, ip: str | None, prior: list[dict], failed_before: in
         "distinct_ips_30d": float(len(set(filter(None, month)))),
         "failed_before_15m": float(failed_before),
         "log_hours_since_last": math.log1p(max(hours_since, 0.0)),
+        "new_country": float(bool(here and seen and here["country"] not in {g["country"] for g in seen})),
+        "new_asn": float(bool(here and seen and here["asn"] not in {g["asn"] for g in seen})),
+        "log_travel_kmh": math.log1p(trip["kmh"]) if trip else 0.0,
     }
 
 
