@@ -44,3 +44,23 @@ def test_train_run_writes_report(fake_db, models_dir):
     assert by_scope["individual"]["behaviour"]["behaviour_jobs"]["samples"] == 80
     assert by_scope["individual"]["feedback"]["types"]["off_hours_wipe"]["multiplier"] == 1.5
     assert (models_dir / "last_training_report.json").exists()
+
+
+def test_monthly_report_counts_and_false_positive_share(fake_db, models_dir):
+    from ml import report
+    rows = [{"id": f"a{i}", "org_id": None, "user_id": "me", "anomaly_type": "off_hours_wipe", "severity": "medium",
+             "status": "resolved", "detector": "rule", "feedback": "false_positive" if i < 3 else "true_positive",
+             "detected_at": f"2026-10-{i + 1:02d}T10:00:00+00:00"} for i in range(4)]
+    rows.append({"id": "b", "org_id": None, "user_id": "someone-else", "anomaly_type": "impossible_travel",
+                 "severity": "high", "status": "open", "detector": "rule", "feedback": None,
+                 "detected_at": "2026-10-05T10:00:00+00:00"})
+    rows.append({"id": "c", "org_id": None, "user_id": "me", "anomaly_type": "off_hours_wipe", "severity": "medium",
+                 "status": "open", "detector": "rule", "feedback": None, "detected_at": "2026-09-30T10:00:00+00:00"})
+    fake_db.tables["anomalies"] = rows
+    mine = report.build(None, "2026-10", "me")
+    assert mine["alerts"]["total"] == 4
+    assert mine["alerts"]["by_type"]["off_hours_wipe"]["false_positive_share"] == 0.75
+    everyone = report.build(None, "2026-10")
+    assert everyone["alerts"]["total"] == 5
+    assert "off_hours_wipe" in report.markdown(mine)
+    assert report._previous_month(__import__("datetime").date(2026, 1, 15)) == "2025-12"

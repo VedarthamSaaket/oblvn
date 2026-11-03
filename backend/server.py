@@ -172,6 +172,12 @@ def _scheduled_batch():
         run_statistical_batch(None)
     except Exception as exc:
         log_event("scheduled_batch_failed", {"error": str(exc)[:500]}, user_id=None)
+    if datetime.now(timezone.utc).day == 1:
+        try:
+            from ml.report import run_monthly
+            run_monthly()
+        except Exception as exc:
+            log_event("ml_report_failed", {"error": str(exc)[:500]}, user_id=None)
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=_scheduled_batch, trigger="cron", hour=2, minute=0)
@@ -1223,6 +1229,21 @@ async def list_anomalies(
 
     r = q.execute()
     return {"anomalies": r.data or []}
+
+
+@app.get("/api/ml/report")
+async def ml_report(request: Request, org_id: Optional[str] = Query(None), month: Optional[str] = Query(None)):
+    user = current_user(request)
+    if org_id in ("undefined", "null", ""):
+        org_id = None
+    if org_id:
+        validate_uuid(org_id, "org_id")
+        assert_org_membership(org_id, user["user_id"], get_service_client(), min_role="org_admin")
+    if month is not None and not (len(month) == 7 and month[4] == "-" and month.replace("-", "").isdigit()):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    from ml import report
+    month = month or report._previous_month(datetime.now(timezone.utc).date())
+    return report.build(org_id, month, None if org_id else user["user_id"])
 
 
 @app.post("/api/anomalies/{anomaly_id}/acknowledge")
