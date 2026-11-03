@@ -24,9 +24,12 @@ def train_scope(org_id: str | None, what: set[str]) -> dict:
 
 def train_global(what: set[str]) -> dict:
     report: dict = {"scope": GLOBAL}
+    jobs = datasource.jobs(None, all_scopes=True) if what & {"duration", "behaviour"} else []
     if "duration" in what:
-        report["duration"] = wipe_duration.train(datasource.jobs(None, all_scopes=True), GLOBAL) \
-            or "not enough completed jobs"
+        report["duration"] = wipe_duration.train(jobs, GLOBAL) or "not enough completed jobs"
+    if "behaviour" in what:
+        result = behaviour.train(jobs, datasource.logins(None, all_scopes=True), GLOBAL, "UTC")
+        report["behaviour"] = {k: v or "not enough samples" for k, v in result.items()}
     if "drive_health" in what:
         if drive_health.DATASET.exists():
             report["drive_health"] = drive_health.train()

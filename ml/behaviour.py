@@ -79,7 +79,7 @@ def _threshold(meta: dict, percentile: float) -> float:
 
 
 def _score(scope: str, name: str, row: dict, names: list[str], multiplier: float) -> tuple[float, dict, list] | None:
-    bundle = registry.load(scope, name)
+    bundle = registry.load_scoped(scope, name)
     if not bundle:
         return None
     x = np.array(vector(row, names))
@@ -88,7 +88,8 @@ def _score(scope: str, name: str, row: dict, names: list[str], multiplier: float
     if s >= _threshold(meta, BASE_PERCENTILE / max(multiplier, 0.1)):
         return None
     severity = "high" if s < _threshold(meta, SEVERE_PERCENTILE) else "medium"
-    return s, {"severity": severity, "trained_at": meta["trained_at"], "samples": meta["samples"]}, \
+    return s, {"severity": severity, "trained_at": meta["trained_at"], "samples": meta["samples"],
+               "scope": meta["scope"]}, \
         top_contributors(x, meta["stats"], names)
 
 
@@ -103,7 +104,7 @@ def score_job(job: dict, history: list[dict], first_at: str | None, tz: str, sco
         "anomaly_type": "ml_unusual_job_behaviour", "severity": info["severity"], "detector": "isolation_forest",
         "score": round(s, 4), "source_event_id": job["id"], "dedupe_key": f"ml_job:{job['id']}",
         "details": {"isolation_score": round(s, 4), "top_reasons": reasons, "model_samples": info["samples"],
-                    "model_trained_at": info["trained_at"]},
+                    "model_scope": info["scope"], "model_trained_at": info["trained_at"]},
     }]
 
 
@@ -118,5 +119,6 @@ def score_login(user_id: str, at: datetime, ip: str | None, prior: list[dict], f
         "anomaly_type": "ml_unusual_login", "severity": info["severity"], "detector": "isolation_forest",
         "score": round(s, 4), "dedupe_key": f"ml_login:{user_id}:{at.strftime('%Y%m%d%H')}",
         "details": {"isolation_score": round(s, 4), "ip_address": ip, "top_reasons": reasons,
-                    "model_samples": info["samples"], "model_trained_at": info["trained_at"]},
+                    "model_samples": info["samples"], "model_scope": info["scope"],
+                    "model_trained_at": info["trained_at"]},
     }]

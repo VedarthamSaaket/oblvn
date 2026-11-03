@@ -56,13 +56,13 @@ def first_job_at(user_id: str) -> str | None:
     return r.data[0]["created_at"] if r.data else None
 
 
-def logins(org_id: str | None) -> list[dict]:
+def logins(org_id: str | None, all_scopes: bool = False) -> list[dict]:
     svc = get_service_client()
 
     def build():
         q = (svc.table("audit_log").select("user_id,org_id,event_type,event_payload,created_at")
              .in_("event_type", ["login_success", "login_failed"]).order("id"))
-        return _scoped(q, org_id)
+        return q if all_scopes else _scoped(q, org_id)
     rows = fetch_all(build)
     for r in rows:
         r["event_payload"] = _json(r.get("event_payload"), {})

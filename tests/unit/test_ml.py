@@ -107,3 +107,13 @@ def test_drive_health_train_and_score(models_dir, tmp_path):
     good = {"attributes": [{"id": i, "raw": "1"} for i in (1, 5, 9, 194, 197)]}
     assert drive_health.score("SER2", good) == []
     assert drive_health.score("SER3", {"attributes": [{"id": 5, "raw": "1"}]}) == []
+
+
+def test_behaviour_falls_back_to_global_model(models_dir):
+    behaviour.train(synthetic_jobs(200), [], "global", "UTC")
+    odd = {"id": "odd2", "user_id": "u", "method": "crypto_erase", "device_type": "usb_flash",
+           "device_capacity_bytes": 2 ** 30, "created_at": datetime(2026, 6, 1, 3, tzinfo=timezone.utc).isoformat()}
+    history = [{"created_at": (datetime(2026, 6, 1, 3, tzinfo=timezone.utc) - timedelta(minutes=m)).isoformat(),
+                "status": "cancelled"} for m in range(1, 30)]
+    found = behaviour.score_job(odd, history, odd["created_at"], "UTC", "some-org-without-a-model")
+    assert found and found[0]["details"]["model_scope"] == "global"
