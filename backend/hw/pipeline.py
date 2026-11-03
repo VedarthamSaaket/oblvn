@@ -155,7 +155,6 @@ class _Runner:
                     overwrite_seconds += result["seconds"]
                 elif step.kind == "verify":
                     result = self._verify(node, size, step, offsets, before)
-                    verification = result
                 elif step.kind == "sed_psid_revert":
                     executors.sed_psid_revert(self.disk, caps, step, ctx, self.options["psid"])
                     result = {}
@@ -164,6 +163,8 @@ class _Runner:
                     result = {}
                     if step.kind in ("remove_hpa", "restore_dco") and SYSTEM == "Linux":
                         size = inventory.exact_size(self.disk)
+                if step.kind == "verify":
+                    verification = result
                 elapsed = time.monotonic() - t0
                 if step.kind not in ("overwrite", "verify"):
                     firmware_seconds += elapsed
