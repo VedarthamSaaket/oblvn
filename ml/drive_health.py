@@ -51,6 +51,8 @@ def train(path=DATASET, test_fraction: float = 0.2) -> dict:
         "drives": int(df["serial_number"].nunique()),
         "date_range": [str(df["date"].min()), str(df["date"].max())],
         "label": "drive fails within the next 30 days",
+        "sampling": "all rows within 30 days before a failure, a random share of rows from drives that never failed, "
+                    "and no negative rows from the last 30 days (their future is unknown)",
         "features": SMART_FEATURES,
         "params": PARAMS,
         "split": {"type": "time", "test_from": str(cutoff), "test_fraction": test_fraction},
@@ -82,9 +84,10 @@ def score(serial: str, snapshot: dict, capacity_bytes: int | None = None) -> lis
         "dedupe_key": f"smart:{serial}:health_model",
         "details": {
             "device_serial": serial,
-            "failure_probability_30d": round(p, 4),
-            "message": "drive shows SMART patterns seen before failures; a firmware wipe may not complete, "
-                       "consider physical destruction",
+            "risk_score": round(p, 4),
+            "message": "drive shows SMART patterns seen in the 30 days before real failures; a firmware wipe "
+                       "may not complete, consider physical destruction",
+            "score_note": "relative risk score from a model trained on 1 percent of healthy rows, not a calibrated probability",
             "model_trained_at": bundle["meta"]["trained_at"],
             "model_holdout_average_precision": (bundle["meta"].get("holdout") or {}).get("average_precision"),
         },
