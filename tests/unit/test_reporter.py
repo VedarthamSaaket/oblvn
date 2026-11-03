@@ -2,7 +2,7 @@ import hashlib
 import json
 import pytest
 from unittest.mock import patch, MagicMock
-from backend.reporter import _compute_hash, _generate_qr
+from backend.reporter import _compute_hash, _get_qr_base64, _verification_method
 
 
 def test_compute_hash_deterministic():
@@ -27,7 +27,7 @@ def test_compute_hash_canonical_key_order():
 
 def test_generate_qr_returns_base64():
     import base64
-    qr = _generate_qr("https://verify.oblvn.com/test-id")
+    qr = _get_qr_base64("https://verify.oblvn.com/test-id")
     decoded = base64.b64decode(qr)
     assert decoded[:8] == b"\x89PNG\r\n\x1a\n"
 
@@ -37,3 +37,14 @@ def test_compute_hash_matches_manual_sha256():
     canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     assert _compute_hash(fields) == expected
+
+
+def test_verification_method_pattern():
+    text = _verification_method({"check": "pattern", "mode": "sample", "samples": 4096, "mismatches": 0})
+    assert "4096 blocks" in text and "0 mismatches" in text
+
+
+def test_verification_method_changed_and_simulated():
+    assert "indeterminate" in _verification_method({"check": "changed", "changed": 5, "unchanged": 0, "indeterminate": 2})
+    assert _verification_method({"simulated": True}) == "simulated (dry run)"
+    assert _verification_method(None) is None
