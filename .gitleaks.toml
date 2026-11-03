@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "fake secrets used only by the test suite"
+paths = ['''tests/conftest\.py''']

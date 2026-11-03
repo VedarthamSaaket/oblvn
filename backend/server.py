@@ -245,6 +245,18 @@ async def landing():
     raise HTTPException(status_code=404, detail="Landing page not found")
 
 
+@app.get("/api/health")
+@limiter.limit("60 per minute")
+async def health(request: Request):
+    try:
+        await asyncio.to_thread(lambda: get_service_client().db.command("ping"))
+        database = "ok"
+    except Exception:
+        database = "unavailable"
+    return JSONResponse(status_code=200 if database == "ok" else 503,
+                        content={"status": "ok" if database == "ok" else "degraded", "database": database})
+
+
 @app.get("/verify/{cert_id}")
 @limiter.limit("60 per minute")
 async def verify_certificate(request: Request, cert_id: str):
