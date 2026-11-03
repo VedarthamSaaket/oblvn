@@ -5,12 +5,17 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    ports:
-      - "5173:5173"
+    expose:
+      - "8000"
     env_file:
       - ../.env
+    environment:
+      OBLVN_HOST: 0.0.0.0
+      OBLVN_TRUSTED_PROXIES: "*"
+      FLASK_ENV: production
+      OBLVN_LOCAL_OPS: "off"
     volumes:
-      - oblvn_data:/root/.oblvn
+      - oblvn_data:/home/oblvn/.oblvn
     restart: unless-stopped
     networks:
       - oblvn_net

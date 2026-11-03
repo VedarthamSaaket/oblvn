@@ -71,10 +71,13 @@ def main():
 
     uvicorn.run(
         "backend.server:app",
-        host="127.0.0.1",
+        host=os.environ.get("OBLVN_HOST", "127.0.0.1"),
         port=args.port,
         log_level="warning",
         loop="asyncio",
+        proxy_headers=True,
+        forwarded_allow_ips=os.environ.get("OBLVN_TRUSTED_PROXIES", "127.0.0.1"),
+        server_header=False,
     )
 
 

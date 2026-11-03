@@ -17,8 +17,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /root/.oblvn/logs /root/.oblvn/certs /root/.oblvn/ots
+RUN useradd --create-home --uid 10001 oblvn \
+    && mkdir -p /home/oblvn/.oblvn/logs /home/oblvn/.oblvn/certs /home/oblvn/.oblvn/ots \
+    && chown -R oblvn:oblvn /home/oblvn/.oblvn /app
 
-EXPOSE 5173
+USER oblvn
 
-CMD ["python", "run.py", "--no-browser", "--port", "5173"]
+EXPOSE 8000
+
+CMD ["python", "run.py", "--no-browser", "--port", "8000"]
