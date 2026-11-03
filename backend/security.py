@@ -85,8 +85,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             pass
 
         # Strip server fingerprinting headers
-        response.headers.pop("Server", None)
-        response.headers.pop("X-Powered-By", None)
+        for name in ("server", "x-powered-by"):
+            if name in response.headers:
+                del response.headers[name]
 
         return response
 
