@@ -115,7 +115,8 @@ const buildQuery = (params) => {
   return q ? `?${q}` : '';
 }
 
-export const WS_BASE = BASE.replace(/\/api\/?$/, '').replace(/^http/, 'ws')
+const API_URL = new URL(BASE, window.location.origin)
+export const WS_BASE = `${API_URL.protocol === 'https:' ? 'wss:' : 'ws:'}//${API_URL.host}${API_URL.pathname.replace(/\/api\/?$/, '')}`
 
 export const api = {
   utils: {
