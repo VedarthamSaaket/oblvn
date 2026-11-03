@@ -2,7 +2,9 @@ import csv
 import hashlib
 import io
 import json
+import threading
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from backend.platform_env import weasy_html
@@ -13,15 +15,33 @@ def _hash_entry(payload: dict, prev_hash: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+GENESIS_HASH = "0" * 64
+PAGE_SIZE = 1000
+_chain_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+
+
+def _scope(q, org_id: str | None):
+    return q.eq("org_id", org_id) if org_id else q.is_("org_id", "null")
+
+
+def fetch_all(build_query) -> list[dict]:
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = build_query().range(start, start + PAGE_SIZE - 1).execute().data or []
+        rows.extend(page)
+        if len(page) < PAGE_SIZE:
+            return rows
+        start += PAGE_SIZE
+
+
 def _get_last_hash(org_id: str | None) -> str:
     svc = get_service_client()
-    q = svc.table("audit_log").select("entry_hash").order("id", desc=True).limit(1)
-    if org_id:
-        q = q.eq("org_id", org_id)
+    q = _scope(svc.table("audit_log").select("entry_hash"), org_id).order("id", desc=True).limit(1)
     r = q.execute()
     if r.data:
         return r.data[0]["entry_hash"]
-    return "0" * 64
+    return GENESIS_HASH
 
 
 def _safe_uuid(value: str | None) -> str | None:
@@ -40,45 +60,43 @@ def log_event(event_type: str, payload: dict, user_id: str,
               anomaly_severity: str | None = None,
               anomaly_type: str | None = None) -> dict:
     svc = get_service_client()
-    prev_hash = _get_last_hash(org_id)
-
-    safe_user_id = _safe_uuid(user_id) or None
+    safe_user_id = _safe_uuid(user_id)
     safe_org_id = _safe_uuid(org_id)
-
     entry_payload = {"event_type": event_type, "payload": payload,
                      "user_id": safe_user_id, "org_id": safe_org_id}
-    entry_hash = _hash_entry(entry_payload, prev_hash)
 
-    row = {
-        "org_id": safe_org_id,
-        "user_id": safe_user_id,
-        "event_type": event_type,
-        "event_payload": json.dumps(payload),
-        "prev_entry_hash": prev_hash,
-        "entry_hash": entry_hash,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "is_anomaly": is_anomaly,
-        "anomaly_severity": anomaly_severity,
-        "anomaly_type": anomaly_type,
-    }
-
-    try:
-        result = svc.table("audit_log").insert(row).execute()
-        return result.data[0] if result.data else row
-    except Exception as exc:
-        print(f"[AUDIT] Failed to log event '{event_type}': {exc}")
+    with _chain_locks[safe_org_id or "global"]:
+        for _ in range(5):
+            prev_hash = _get_last_hash(safe_org_id)
+            row = {
+                "org_id": safe_org_id,
+                "user_id": safe_user_id,
+                "event_type": event_type,
+                "event_payload": json.dumps(payload),
+                "prev_entry_hash": prev_hash,
+                "entry_hash": _hash_entry(entry_payload, prev_hash),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "is_anomaly": is_anomaly,
+                "anomaly_severity": anomaly_severity,
+                "anomaly_type": anomaly_type,
+            }
+            try:
+                result = svc.table("audit_log").insert(row).execute()
+                return result.data[0] if result.data else row
+            except Exception as exc:
+                if "23505" in str(exc) or "duplicate key" in str(exc):
+                    continue
+                print(f"[AUDIT] Failed to log event '{event_type}': {exc}")
+                return row
+        print(f"[AUDIT] Chain contention, could not append '{event_type}'")
         return row
 
 
 def verify_chain(org_id: str | None = None) -> dict:
     svc = get_service_client()
-    q = svc.table("audit_log").select("*").order("id", desc=False)
-    if org_id:
-        q = q.eq("org_id", org_id)
-    r = q.execute()
-    entries = r.data or []
+    entries = fetch_all(lambda: _scope(svc.table("audit_log").select("*"), org_id).order("id", desc=False))
 
-    prev_hash = "0" * 64
+    prev_hash = GENESIS_HASH
     broken_at = None
 
     for i, entry in enumerate(entries):
@@ -101,18 +119,23 @@ def verify_chain(org_id: str | None = None) -> dict:
     }
 
 
+def _export_rows(svc, org_id, start, end) -> list[dict]:
+    def build():
+        q = svc.table("audit_log").select("*").order("id", desc=False)
+        if org_id:
+            q = q.eq("org_id", org_id)
+        if start:
+            q = q.gte("created_at", start)
+        if end:
+            q = q.lte("created_at", end)
+        return q
+    return fetch_all(build)
+
+
 def export_csv(org_id: str | None = None, start: str | None = None,
                end: str | None = None) -> str:
     svc = get_service_client()
-    q = svc.table("audit_log").select("*").order("id", desc=False)
-    if org_id:
-        q = q.eq("org_id", org_id)
-    if start:
-        q = q.gte("created_at", start)
-    if end:
-        q = q.lte("created_at", end)
-    r = q.execute()
-    entries = r.data or []
+    entries = _export_rows(svc, org_id, start, end)
 
     buf = io.StringIO()
     if not entries:
@@ -127,15 +150,7 @@ def export_csv(org_id: str | None = None, start: str | None = None,
 def export_json(org_id: str | None = None, start: str | None = None,
                 end: str | None = None) -> list[dict]:
     svc = get_service_client()
-    q = svc.table("audit_log").select("*").order("id", desc=False)
-    if org_id:
-        q = q.eq("org_id", org_id)
-    if start:
-        q = q.gte("created_at", start)
-    if end:
-        q = q.lte("created_at", end)
-    r = q.execute()
-    return r.data or []
+    return _export_rows(svc, org_id, start, end)
 
 
 # --- WeasyPrint PDF Export ---
