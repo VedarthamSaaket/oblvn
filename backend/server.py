@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Query
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, HTMLResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -45,6 +45,9 @@ from slowapi.errors import RateLimitExceeded
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from backend import jobs, realtime
+from backend.accounts import service as accounts_service
+from backend.accounts.service import AuthError
+from backend.db import DuplicateKey, get_user_client
 from backend.agent_api import agent_devices, find_agent_device, router as agent_router
 from backend.anomaly import (
     acknowledge_anomaly, check_failed_logins, check_new_ip,
@@ -58,7 +61,7 @@ from backend.auth import current_user, get_user_role, validate_token
 from backend.config import config
 from backend.detector import DeviceDetectionError, detect_devices, get_device_by_serial
 from backend.file_wipe import PathRejected, check_path
-from backend.supabase_client import get_service_client
+from backend.db import get_service_client
 
 # Security module — all helpers live here
 from backend.security import (
@@ -117,6 +120,18 @@ class RoleBody(BaseModel):
 
 class ApproveBody(BaseModel):
     org_id: Optional[str] = None
+
+class MfaLoginBody(BaseModel):
+    mfa_token: str
+    code: str
+
+class CodeBody(BaseModel):
+    code: str
+
+class PasswordUpdateBody(BaseModel):
+    token: str
+    password: str
+    invite: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,79 +279,72 @@ async def verify_certificate(cert_id: str):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/auth/register", status_code=201)
-@limiter.limit("10 per minute")          # prevent automated account creation
+@limiter.limit("10 per minute")
 async def register(request: Request, body: AuthBody):
-    # Validate email format and password strength before touching Supabase
     validated_email = validate_email(body.email)
     validate_password_strength(body.password)
+    result = accounts_service.sign_up(validated_email, body.password)
+    if result.get("user_id"):
+        log_event("user_registered", {"email": validated_email}, user_id=result["user_id"])
+    return {"user_id": (result.get("user") or {}).get("id") or "pending_confirmation",
+            "confirm_email": result["confirm_email"]}
 
-    client = get_service_client()
+
+def _login_success(session: dict, ip: str) -> dict:
+    user_id = session["user"]["id"]
+    org_id = primary_org(user_id)
+    log_event("login_success", {"email": session["user"]["email"], "ip_address": ip}, user_id=user_id, org_id=org_id)
+    now = datetime.now(timezone.utc)
+    for check in (lambda: check_new_ip(user_id, org_id, ip),
+                  lambda: check_unusual_login_hour(user_id, org_id, now),
+                  lambda: check_impossible_travel(user_id, org_id, ip, now),
+                  lambda: score_login(user_id, org_id, ip, now)):
+        try:
+            check()
+        except Exception as exc:
+            print(f"[ANOMALY] login check failed: {exc}")
+    return {k: session[k] for k in ("access_token", "refresh_token", "expires_in", "token_type", "user")}
+
+
+def _login_failed(email: str, ip: str, exc: AuthError) -> None:
+    log_event("login_failed", {"email": email, "ip_address": ip, "reason": exc.code}, user_id=None)
     try:
-        result = client.auth.sign_up({"email": validated_email, "password": body.password})
-        if result.user is None:
-            return {"user_id": "pending_confirmation", "confirm_email": True}
-        user_id = result.user.id
-        log_event("user_registered", {"email": validated_email}, user_id=user_id)
-        return {"user_id": user_id, "confirm_email": False}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        print(f"[REGISTER ERROR] {type(exc).__name__}: {exc}")
-        # Do not leak provider error details; return a generic message
-        raise HTTPException(
-            status_code=400,
-            detail=safe_error_detail(exc, "Registration failed. Please try again."),
-        )
+        check_failed_logins(email, None, ip)
+    except Exception:
+        pass
 
 
 @app.post("/api/auth/login")
 @limiter.limit(config.AUTH_RATE_LIMIT)
 async def login(request: Request, body: AuthBody):
-    # Validate email format to reject obviously malformed inputs early
     validated_email = validate_email(body.email)
-
-    client = get_service_client()
     ip = request.client.host if request.client else "unknown"
     try:
-        result = client.auth.sign_in_with_password(
-            {"email": validated_email, "password": body.password}
-        )
-        user_id = result.user.id
-        org_id = primary_org(user_id)
-        log_event("login_success", {"email": validated_email, "ip_address": ip}, user_id=user_id, org_id=org_id)
-        now = datetime.now(timezone.utc)
-        for check in (lambda: check_new_ip(user_id, org_id, ip),
-                      lambda: check_unusual_login_hour(user_id, org_id, now),
-                      lambda: check_impossible_travel(user_id, org_id, ip, now),
-                      lambda: score_login(user_id, org_id, ip, now)):
-            try:
-                check()
-            except Exception as exc:
-                print(f"[ANOMALY] login check failed: {exc}")
-        return {
-            "access_token":  result.session.access_token,
-            "refresh_token": result.session.refresh_token,
-            "user":          {"id": user_id, "email": validated_email},
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        log_event("login_failed", {"email": validated_email, "ip_address": ip}, user_id=None)
-        try:
-            check_failed_logins(validated_email, None, ip)
-        except Exception:
-            pass
-        # Always return the same generic message to prevent user enumeration
-        raise HTTPException(status_code=401, detail="Invalid login credentials")
+        result = accounts_service.sign_in(validated_email, body.password)
+    except AuthError as exc:
+        _login_failed(validated_email, ip, exc)
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    if result.get("mfa_required"):
+        return {"mfa_required": True, "mfa_token": result["mfa_token"]}
+    return _login_success(result, ip)
+
+
+@app.post("/api/auth/2fa/login")
+@limiter.limit(config.AUTH_RATE_LIMIT)
+async def login_second_factor(request: Request, body: MfaLoginBody):
+    ip = request.client.host if request.client else "unknown"
+    try:
+        session = accounts_service.sign_in_mfa(body.mfa_token, body.code)
+    except AuthError as exc:
+        log_event("login_failed", {"ip_address": ip, "reason": exc.code}, user_id=None)
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    return _login_success(session, ip)
 
 
 @app.post("/api/auth/logout")
 async def logout(request: Request):
     user = current_user(request)
-    try:
-        get_service_client().auth.admin.sign_out(user["token"])
-    except Exception:
-        pass
+    accounts_service.sign_out(user["session_id"])
     log_event("logout", {}, user_id=user["user_id"])
     return {"ok": True}
 
@@ -345,23 +353,48 @@ async def logout(request: Request):
 @limiter.limit("30 per minute")
 async def refresh(request: Request, body: RefreshBody):
     try:
-        result = get_service_client().auth.refresh_session(body.refresh_token)
-        return {
-            "access_token":  result.session.access_token,
-            "refresh_token": result.session.refresh_token,
-        }
-    except Exception as exc:
+        session = accounts_service.refresh(body.refresh_token)
+    except AuthError as exc:
+        if exc.code == "refresh_reuse":
+            log_event("refresh_token_reuse", {"ip_address": request.client.host if request.client else "unknown"},
+                      user_id=None)
         raise HTTPException(status_code=401, detail="Token refresh failed")
+    return {"access_token": session["access_token"], "refresh_token": session["refresh_token"],
+            "expires_in": session["expires_in"]}
+
+
+@app.get("/api/auth/me")
+async def me(request: Request):
+    user = current_user(request)
+    return accounts_service.get_user(user["user_id"])
 
 
 @app.post("/api/auth/2fa/setup")
 async def setup_2fa(request: Request):
-    current_user(request)
-    return {
-        "message":  "TOTP enrollment is handled via Supabase MFA API",
-        "endpoint": f"{config.SUPABASE_URL}/auth/v1/factors",
-        "docs":     "https://supabase.com/docs/guides/auth/auth-mfa",
-    }
+    user = current_user(request)
+    return accounts_service.mfa_setup(user["user_id"])
+
+
+@app.post("/api/auth/2fa/enable")
+async def enable_2fa(request: Request, body: CodeBody):
+    user = current_user(request)
+    try:
+        codes = accounts_service.mfa_enable(user["user_id"], body.code)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    log_event("mfa_enabled", {}, user_id=user["user_id"])
+    return {"ok": True, "recovery_codes": codes}
+
+
+@app.post("/api/auth/2fa/disable")
+async def disable_2fa(request: Request, body: CodeBody):
+    user = current_user(request)
+    try:
+        accounts_service.mfa_disable(user["user_id"], body.code)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    log_event("mfa_disabled", {}, user_id=user["user_id"])
+    return {"ok": True}
 
 
 @app.post("/api/auth/password/reset")
@@ -369,11 +402,44 @@ async def setup_2fa(request: Request):
 async def password_reset(request: Request, body: ResetBody):
     validated_email = validate_email(body.email)
     try:
-        get_service_client().auth.reset_password_email(validated_email)
-        # Always return success — never reveal whether the email exists
-        return {"ok": True}
-    except Exception:
-        return {"ok": True}
+        accounts_service.request_password_reset(validated_email)
+    except Exception as exc:
+        print(f"[AUTH] reset email failed: {exc}")
+    return {"ok": True}
+
+
+@app.post("/api/auth/password/update")
+@limiter.limit(config.AUTH_RATE_LIMIT)
+async def password_update(request: Request, body: PasswordUpdateBody):
+    validate_password_strength(body.password)
+    try:
+        user = accounts_service.reset_password(body.token, body.password, "invite" if body.invite else "reset_password")
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    if body.invite:
+        get_service_client().table("org_memberships").update({"joined_at": datetime.now(timezone.utc).isoformat()}) \
+            .eq("user_id", user["id"]).is_("joined_at", "null").execute()
+    log_event("password_changed", {"via": "invite" if body.invite else "reset"}, user_id=user["id"])
+    return {"ok": True, "email": user["email"]}
+
+
+@app.get("/api/auth/verify-email")
+async def verify_email(token: str = Query(...)):
+    try:
+        user = accounts_service.verify_email(token)
+        log_event("email_verified", {}, user_id=user["id"])
+        return RedirectResponse(f"{config.PUBLIC_URL.rstrip('/')}/app/login?verified=1", status_code=303)
+    except AuthError:
+        return RedirectResponse(f"{config.PUBLIC_URL.rstrip('/')}/app/login?verified=0", status_code=303)
+
+
+@app.post("/api/auth/verify-email/resend")
+@limiter.limit("5 per minute")
+async def resend_verification(request: Request, body: ResetBody):
+    found = accounts_service.get_user_by_email(validate_email(body.email))
+    if found and not found["email_confirmed_at"]:
+        accounts_service.send_verification(found["id"])
+    return {"ok": True}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -848,15 +914,16 @@ async def list_jobs(request: Request, org_id: Optional[str] = Query(None)):
         org_id = None
 
     svc = get_service_client()
+    scoped = get_user_client(user["user_id"])
 
     if org_id:
         # IDOR: verify caller is a member of the org before listing its jobs
         validate_uuid(org_id, "org_id")
         assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
-        q = svc.table("wipe_jobs").select("*").order("created_at", desc=True).eq("org_id", org_id)
+        q = scoped.table("wipe_jobs").select("*").order("created_at", desc=True).eq("org_id", org_id)
     else:
         # No org_id → return only the authenticated user's own jobs
-        q = svc.table("wipe_jobs").select("*").order("created_at", desc=True).eq("user_id", user["user_id"])
+        q = scoped.table("wipe_jobs").select("*").order("created_at", desc=True).eq("user_id", user["user_id"])
 
     r = q.execute()
     return {"jobs": r.data or []}
@@ -986,7 +1053,7 @@ async def get_job(job_id: str, request: Request):
     user = current_user(request)
     svc  = get_service_client()
 
-    r = svc.table("wipe_jobs").select("*").eq("id", job_id).maybe_single().execute()
+    r = get_user_client(user["user_id"]).table("wipe_jobs").select("*").eq("id", job_id).maybe_single().execute()
     if not r.data:
         raise HTTPException(status_code=404, detail="Job not found")
     job = r.data
@@ -1219,10 +1286,10 @@ async def list_anomalies(
         validate_uuid(org_id, "org_id")
         # IDOR: verify org membership before listing org anomalies
         assert_org_membership(org_id, user["user_id"], svc, min_role="operator")
-        q = svc.table("anomalies").select("*").order("detected_at", desc=True).eq("org_id", org_id)
+        q = get_user_client(user["user_id"]).table("anomalies").select("*").order("detected_at", desc=True).eq("org_id", org_id)
     else:
         # Account isolation: no org → return only anomalies linked to this user
-        q = svc.table("anomalies").select("*").order("detected_at", desc=True).eq("user_id", user["user_id"])
+        q = get_user_client(user["user_id"]).table("anomalies").select("*").order("detected_at", desc=True).eq("user_id", user["user_id"])
 
     if status:
         q = q.eq("status", status)
@@ -1346,25 +1413,22 @@ async def invite_member(org_id: str, request: Request, body: InviteBody):
     validate_enum(body.role, ALLOWED_ROLES, "role")
 
     svc = get_service_client()
+    org = svc.table("organisations").select("name").eq("id", org_id).maybe_single().execute().data or {}
     try:
-        user_result = svc.auth.admin.invite_user_by_email(validated_email)
+        invited = accounts_service.invite(validated_email, org.get("name", "an organisation"), body.role)
         svc.table("org_memberships").insert({
-            "user_id":    user_result.user.id,
+            "user_id":    invited["user"]["id"],
             "org_id":     org_id,
             "role":       body.role,
             "invited_at": datetime.now(timezone.utc).isoformat(),
+            "joined_at":  None if invited["created"] or not invited["user"]["email_confirmed_at"]
+                          else datetime.now(timezone.utc).isoformat(),
         }).execute()
-        log_event(
-            "member_invited",
-            {"email": validated_email, "role": body.role},
-            user_id=user["user_id"],
-            org_id=org_id,
-        )
-        return {"ok": True}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=safe_error_detail(exc, "Invite failed"))
+    except DuplicateKey:
+        raise HTTPException(status_code=409, detail="That person is already a member of this organisation")
+    log_event("member_invited", {"email": validated_email, "role": body.role, "new_account": invited["created"]},
+              user_id=user["user_id"], org_id=org_id)
+    return {"ok": True}
 
 
 @app.delete("/api/orgs/{org_id}/members/{user_id}")

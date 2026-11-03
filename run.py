@@ -28,7 +28,7 @@ def check_env():
         print("\n[OBLVN] Missing required environment variables:")
         for k in missing:
             print(f"         {k}")
-        print("\n  Fill in your .env file with real Supabase credentials.\n")
+        print("\n  Fill in .env: MONGODB_URI (Atlas connection string), OBLVN_JWT_SECRET and OBLVN_SECRET_KEY.\n")
         sys.exit(1)
 
 
