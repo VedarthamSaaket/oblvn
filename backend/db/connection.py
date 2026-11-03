@@ -7,12 +7,13 @@ _db = None
 
 def _open():
     from pymongo import MongoClient
-    uri = os.environ.get("MONGODB_URI", "")
+    from backend.config import config
+    uri = config.MONGODB_URI or os.environ.get("MONGODB_URI", "")
     if not uri:
         raise RuntimeError("MONGODB_URI is not set; add your MongoDB Atlas connection string to .env")
     client = MongoClient(uri, tz_aware=True, appname="oblvn", serverSelectionTimeoutMS=10000,
                          retryWrites=True, w="majority")
-    return client[os.environ.get("MONGODB_DB", "oblvn")]
+    return client[config.MONGODB_DB or "oblvn"]
 
 
 def get_database():
