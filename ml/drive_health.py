@@ -16,7 +16,7 @@ NAME = "drive_health"
 DATASET = PROCESSED_DIR / "drive_health.parquet"
 PARAMS = dict(max_iter=400, learning_rate=0.05, max_leaf_nodes=31, l2_regularization=1.0,
               min_samples_leaf=40, early_stopping=False, random_state=42)
-HIGH = 0.30
+HIGH = 0.20
 MEDIUM = 0.10
 THRESHOLDS = (0.02, 0.05, 0.10, 0.20, 0.30, 0.50)
 
