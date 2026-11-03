@@ -413,13 +413,41 @@ def check_smart_anomalies(device_serial: str, smart_snapshot: dict,
     if smart_snapshot.get("health") == "Failed":
         add("smart_overall_failed", "critical", {"health": "Failed"}, "overall")
 
+    history = []
+    try:
+        history = smart_history(device_serial)
+        record_smart_snapshot(device_serial, smart_snapshot, org_id)
+    except Exception as exc:
+        print(f"[ANOMALY] smart history unavailable: {exc}")
     try:
         from ml.scoring import score_smart
-        for finding in score_smart(device_serial, smart_snapshot):
+        for finding in score_smart(device_serial, smart_snapshot, None, history):
             found.append(record_model_anomaly(finding, org_id, user_id))
     except Exception as exc:
         print(f"[ANOMALY] drive health model skipped: {exc}")
     return found
+
+
+def smart_history(serial: str, days: int = 45) -> list[dict]:
+    since = (_now() - timedelta(days=days)).isoformat()
+    r = (get_service_client().table("smart_history").select("captured_at,snapshot")
+         .eq("serial", serial).gte("captured_at", since).order("captured_at").execute())
+    return r.data or []
+
+
+def record_smart_snapshot(serial: str, snapshot: dict, org_id: str | None) -> None:
+    today = _now().date().isoformat()
+    svc = get_service_client()
+    exists = svc.table("smart_history").select("serial").eq("serial", serial).eq("captured_on", today).limit(1).execute()
+    if exists.data:
+        return
+    keep = {k: snapshot.get(k) for k in ("model", "serial", "rotation_rate", "attributes", "nvme", "health")}
+    try:
+        svc.table("smart_history").insert({"serial": serial, "captured_on": today, "captured_at": _now().isoformat(),
+                                           "org_id": org_id, "snapshot": keep}).execute()
+    except Exception as exc:
+        if "23505" not in str(exc) and "duplicate key" not in str(exc):
+            raise
 
 
 def seconds_per_gib_pass(job: dict) -> float | None:

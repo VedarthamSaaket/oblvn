@@ -26,5 +26,6 @@ def score_login(user_id: str, org_id: str | None, ip: str, at: datetime) -> list
                                  scope_name(org_id), cutoff_multiplier(org_id, "ml_unusual_login"))
 
 
-def score_smart(serial: str, snapshot: dict, capacity_bytes: int | None = None) -> list[dict]:
-    return drive_health.score(serial, snapshot, capacity_bytes)
+def score_smart(serial: str, snapshot: dict, capacity_bytes: int | None = None,
+                history: list[dict] | None = None) -> list[dict]:
+    return drive_health.score(serial, snapshot, capacity_bytes, history)
