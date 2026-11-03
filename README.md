@@ -179,6 +179,14 @@ ots verify ~/.oblvn/ots/{cert-id}.ots
 
 ---
 
+## IP Geolocation
+
+Login checks use the free DB-IP Lite city and ASN databases to spot new countries, new networks and impossible travel.
+Download them with python -m ml.scripts.fetch_geoip, which saves them to ml/data/geo.
+IP Geolocation by DB-IP (https://db-ip.com), licensed under Creative Commons Attribution 4.0.
+
+---
+
 ## Linux Wipe Agent
 
 The agent runs on a Linux machine or the live USB built from agent/live/build.sh.
