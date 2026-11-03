@@ -188,8 +188,10 @@ def json_schema(name: str) -> dict:
     for k, (lo, hi) in s.get("ranges", {}).items():
         props[k] = {"bsonType": ["int", "long", "null"], "minimum": lo, "maximum": hi}
     schema = {"bsonType": "object", "properties": props}
-    if s.get("required"):
-        schema["required"] = list(s["required"])
+    key = s.get("key")
+    required = ["_id" if field == key else field for field in s.get("required", [])]
+    if required:
+        schema["required"] = required
     return {"$jsonSchema": schema}
 
 
@@ -203,10 +205,13 @@ def ensure_schema(db) -> None:
             except Exception:
                 db.create_collection(name)
         elif validator:
-            try:
-                db.command("collMod", name, validator=validator, validationLevel="strict")
-            except Exception:
-                pass
+            current = (db[name].options() or {}).get("validator")
+            if current != validator:
+                try:
+                    db.command("collMod", name, validator=validator, validationLevel="strict")
+                except Exception as exc:
+                    print(f"[DB] could not update the {name} validator ({exc.__class__.__name__}); the database user "
+                          "needs the collMod privilege (dbAdmin) or the collection must be recreated")
         for index in s.get("indexes", []):
             options = {k: v for k, v in index.document.items() if k != "key"}
             db[name].create_index(list(index.document["key"].items()), **options)
