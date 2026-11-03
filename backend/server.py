@@ -47,7 +47,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from backend import jobs, local_ops, realtime
 from backend.accounts import service as accounts_service
 from backend.accounts.service import AuthError
-from backend.db import DuplicateKey, get_user_client
+from backend.db import DuplicateKey, UnsafeValue, ValidationError as DbValidationError, get_user_client
 from backend.agent_api import agent_devices, find_agent_device, router as agent_router
 from backend.anomaly import (
     acknowledge_anomaly, check_failed_logins, check_new_ip,
@@ -147,6 +147,16 @@ _docs = config.ENV == "development"
 app = FastAPI(title="OBLVN", docs_url="/docs" if _docs else None, redoc_url="/redoc" if _docs else None,
               openapi_url="/openapi.json" if _docs else None)
 app.state.limiter = limiter
+
+
+@app.exception_handler(UnsafeValue)
+async def _unsafe_value(request: Request, exc: UnsafeValue):
+    return JSONResponse(status_code=400, content={"detail": "Invalid input"})
+
+
+@app.exception_handler(DbValidationError)
+async def _invalid_document(request: Request, exc: DbValidationError):
+    return JSONResponse(status_code=400, content={"detail": "Invalid input"})
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── Security middlewares (order matters — outermost runs first) ───────────────
@@ -1005,6 +1015,8 @@ async def create_job(request: Request):
     standard = validate_enum(data.get("standard", ""), ALLOWED_STANDARDS, "standard")
 
     target_serial = data.get("device_serial", "")
+    if not isinstance(target_serial, str) or not target_serial or len(target_serial) > 4096:
+        raise HTTPException(status_code=400, detail="device_serial must be a non-empty string")
     options = _job_options(data.get("options"))
     agent_id = None
 
