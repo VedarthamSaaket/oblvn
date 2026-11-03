@@ -63,8 +63,17 @@ def train(path=DATASET, test_fraction: float = 0.2) -> dict:
     return registry.save(GLOBAL, NAME, model, meta)
 
 
+def is_hard_drive(snapshot: dict) -> bool:
+    if snapshot.get("nvme"):
+        return False
+    rate = snapshot.get("rotation_rate")
+    if rate == 0 or (isinstance(rate, str) and "solid" in rate.lower()):
+        return False
+    return True
+
+
 def score(serial: str, snapshot: dict, capacity_bytes: int | None = None) -> list[dict]:
-    if not snapshot or not snapshot.get("attributes"):
+    if not snapshot or not snapshot.get("attributes") or not is_hard_drive(snapshot):
         return []
     bundle = registry.load(GLOBAL, NAME)
     if not bundle:

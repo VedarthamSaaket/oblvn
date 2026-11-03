@@ -139,3 +139,12 @@ def test_duration_retrain_reports_promotion(models_dir):
     second = wipe_duration.train(synthetic_jobs(seed=8), "individual")
     assert first["promotion"]["decision"] == "promoted"
     assert second["promotion"]["incumbent"] is not None
+
+
+def test_drive_health_skips_ssd_and_nvme():
+    assert drive_health.is_hard_drive({"rotation_rate": 7200, "attributes": [1]})
+    assert drive_health.is_hard_drive({"attributes": [1]})
+    assert not drive_health.is_hard_drive({"rotation_rate": 0, "attributes": [1]})
+    assert not drive_health.is_hard_drive({"rotation_rate": "Solid State Device", "attributes": [1]})
+    assert not drive_health.is_hard_drive({"nvme": {"percentage_used": 3}, "attributes": []})
+    assert drive_health.score("SSD", {"rotation_rate": 0, "attributes": [{"id": 5, "raw": "900"}] * 5}) == []
