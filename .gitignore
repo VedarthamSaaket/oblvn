@@ -148,3 +148,7 @@ agent/live/.build/
 agent/live/cache/
 agent/live/chroot/
 agent/live/binary/
+ml/data/*
+!ml/data/.gitkeep
+ml/models/*
+!ml/models/.gitkeep
