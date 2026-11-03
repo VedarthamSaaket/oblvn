@@ -15,6 +15,30 @@ class AppendOnly(PermissionError):
     pass
 
 
+class UnsafeValue(ValueError):
+    pass
+
+
+def _literal(value):
+    if isinstance(value, dict):
+        raise UnsafeValue("filter values must be plain values, not objects")
+    if isinstance(value, (list, tuple, set)):
+        for v in value:
+            _literal(v)
+    return value
+
+
+def _check_keys(doc, path: str = "") -> None:
+    if isinstance(doc, dict):
+        for k, v in doc.items():
+            if not isinstance(k, str) or k.startswith("$") or "\x00" in k:
+                raise UnsafeValue(f"field name {path + str(k)!r} is not allowed")
+            _check_keys(v, f"{path}{k}.")
+    elif isinstance(doc, (list, tuple)):
+        for v in doc:
+            _check_keys(v, path)
+
+
 class Response:
     def __init__(self, data, count=None):
         self.data = data
@@ -80,30 +104,32 @@ class Query:
         return self
 
     def eq(self, col, value):
-        return self._add(self._field(col), value)
+        return self._add(self._field(col), {"$eq": _literal(value)})
 
     def neq(self, col, value):
-        return self._add(self._field(col), {"$ne": value})
+        return self._add(self._field(col), {"$ne": _literal(value)})
 
     def is_(self, col, value):
-        return self._add(self._field(col), None if value == "null" else value)
+        return self._add(self._field(col), None if value == "null" else {"$eq": _literal(value)})
 
     def in_(self, col, values):
-        return self._add(self._field(col), {"$in": list(values)})
+        return self._add(self._field(col), {"$in": list(_literal(list(values)))})
 
     def gt(self, col, value):
-        return self._add(self._field(col), {"$gt": value})
+        return self._add(self._field(col), {"$gt": _literal(value)})
 
     def gte(self, col, value):
-        return self._add(self._field(col), {"$gte": value})
+        return self._add(self._field(col), {"$gte": _literal(value)})
 
     def lt(self, col, value):
-        return self._add(self._field(col), {"$lt": value})
+        return self._add(self._field(col), {"$lt": _literal(value)})
 
     def lte(self, col, value):
-        return self._add(self._field(col), {"$lte": value})
+        return self._add(self._field(col), {"$lte": _literal(value)})
 
     def order(self, col, desc: bool = False):
+        if not isinstance(col, str) or col.startswith("$"):
+            raise UnsafeValue("sort column must be a plain field name")
         self.sort.append((self._field(col), DESCENDING if desc else ASCENDING))
         return self
 
@@ -131,6 +157,7 @@ class Query:
         return int(doc["seq"])
 
     def _prepare(self, item: dict) -> dict:
+        _check_keys(item)
         doc = apply_computed(self.name, apply_defaults(self.name, copy.deepcopy(item)))
         validate(self.name, doc)
         if self.spec.get("serial"):
@@ -181,6 +208,7 @@ class Query:
         return Response([_public(d, self.key) for d in docs])
 
     def _update(self) -> Response:
+        _check_keys(self.payload)
         changes = copy.deepcopy(self.payload)
         changes.pop(self.key, None) if self.key else None
         validate(self.name, changes, partial=True)

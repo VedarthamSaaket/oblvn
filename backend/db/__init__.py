@@ -1,6 +1,6 @@
 from backend.db.connection import get_database, set_database
 from backend.db.policies import DENY_ALL, policy
-from backend.db.query import AppendOnly, DuplicateKey, Query, Response
+from backend.db.query import AppendOnly, DuplicateKey, Query, Response, UnsafeValue
 from backend.db.schema import ValidationError
 
 
@@ -31,6 +31,6 @@ def get_user_client(user_id: str) -> UserClient:
 
 
 __all__ = [
-    "AppendOnly", "DuplicateKey", "Query", "Response", "ServiceClient", "UserClient", "ValidationError",
+    "AppendOnly", "DuplicateKey", "UnsafeValue", "Query", "Response", "ServiceClient", "UserClient", "ValidationError",
     "get_database", "get_service_client", "get_user_client", "set_database",
 ]
