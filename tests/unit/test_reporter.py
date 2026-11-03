@@ -48,3 +48,23 @@ def test_verification_method_changed_and_simulated():
     assert "indeterminate" in _verification_method({"check": "changed", "changed": 5, "unchanged": 0, "indeterminate": 2})
     assert _verification_method({"simulated": True}) == "simulated (dry run)"
     assert _verification_method(None) is None
+
+
+def test_certificate_renders_single_landscape_page_with_artwork(tmp_path, monkeypatch):
+    import pymupdf
+    import backend.reporter as rep
+    monkeypatch.setattr(rep.config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(rep, "stamp_certificate", lambda h, cid: {"pending": True})
+    job = {"id": "5f1c2a9e-7d3b-4e61-9a20-8c4b1e7f3d55", "device_serial": "S" * 200, "device_model": "M" * 200,
+           "device_capacity_bytes": 10 ** 12, "device_type": "nvme", "method": "crypto_erase",
+           "standard": "nist_800_88", "passes_completed": 1, "verification_passed": True}
+    record = {"technique": "nvme_sanitize_crypto", "nist_category": "purge",
+              "verification": {"check": "changed", "changed": 10, "unchanged": 0, "indeterminate": 0, "passed": True}}
+    out = rep.generate_certificate(job, {"id": "u", "email": "a@b.c"}, None, None, record)
+    doc = pymupdf.open(out["pdf_path"])
+    assert len(doc) == 1
+    assert round(doc[0].rect.width) == 842 and round(doc[0].rect.height) == 595
+    assert doc[0].get_images()
+    fonts = " ".join(f[3] for f in doc[0].get_fonts())
+    assert "Playfair" in fonts and "Plex-Mono" in fonts
+    assert out["fields"]["nist_800_88_category"] == "purge"
