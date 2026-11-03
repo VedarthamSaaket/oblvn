@@ -119,11 +119,13 @@ def verify_chain(org_id: str | None = None) -> dict:
     }
 
 
-def _export_rows(svc, org_id, start, end) -> list[dict]:
+def _export_rows(svc, org_id, start, end, user_id=None) -> list[dict]:
+    if not org_id and not user_id:
+        raise ValueError("audit export needs an org_id or a user_id scope")
+
     def build():
         q = svc.table("audit_log").select("*").order("id", desc=False)
-        if org_id:
-            q = q.eq("org_id", org_id)
+        q = q.eq("org_id", org_id) if org_id else q.eq("user_id", user_id)
         if start:
             q = q.gte("created_at", start)
         if end:
@@ -133,9 +135,9 @@ def _export_rows(svc, org_id, start, end) -> list[dict]:
 
 
 def export_csv(org_id: str | None = None, start: str | None = None,
-               end: str | None = None) -> str:
+               end: str | None = None, user_id: str | None = None) -> str:
     svc = get_service_client()
-    entries = _export_rows(svc, org_id, start, end)
+    entries = _export_rows(svc, org_id, start, end, user_id)
 
     buf = io.StringIO()
     if not entries:
@@ -148,15 +150,15 @@ def export_csv(org_id: str | None = None, start: str | None = None,
 
 
 def export_json(org_id: str | None = None, start: str | None = None,
-                end: str | None = None) -> list[dict]:
+                end: str | None = None, user_id: str | None = None) -> list[dict]:
     svc = get_service_client()
-    return _export_rows(svc, org_id, start, end)
+    return _export_rows(svc, org_id, start, end, user_id)
 
 
 # --- WeasyPrint PDF Export ---
 def export_pdf(org_id: str | None = None, start: str | None = None,
-               end: str | None = None) -> bytes:
-    entries = export_json(org_id, start, end)
+               end: str | None = None, user_id: str | None = None) -> bytes:
+    entries = export_json(org_id, start, end, user_id)
     chain = verify_chain(org_id)
 
     # Prepare Chain Integrity Status
