@@ -25,14 +25,9 @@ def _free_port() -> int:
 
 
 def build_frontend() -> None:
-    dist = ROOT / "frontend" / "dist" / "index.html"
-    marker = ROOT / "frontend" / "dist" / ".same-origin-build"
-    if dist.exists() and marker.exists():
-        return
     env = {**os.environ, "VITE_API_BASE_URL": "/api"}
     subprocess.run(["./node_modules/.bin/vite", "build"], cwd=ROOT / "frontend", env=env, check=True,
                    capture_output=True)
-    marker.write_text("built with VITE_API_BASE_URL=/api\n")
 
 
 def drop_test_database(uri: str) -> None:
