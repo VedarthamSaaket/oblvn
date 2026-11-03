@@ -10,6 +10,9 @@ TOKEN_TTL = {"verify_email": timedelta(hours=24), "reset_password": timedelta(ho
              "invite": timedelta(days=7), "mfa_login": timedelta(minutes=5)}
 
 
+MFA_MAX_ATTEMPTS = 5
+
+
 class AuthError(Exception):
     def __init__(self, status: int, message: str, code: str):
         super().__init__(message)
@@ -218,6 +221,13 @@ def sign_in_mfa(mfa_token: str, code: str) -> dict:
         raise AuthError(401, "Two-factor session expired. Sign in again.", "mfa_expired")
     user = _users().find_one({"_id": doc["user_id"]})
     if not user or not _check_second_factor(user, code):
+        attempts = int(doc.get("attempts") or 0) + 1
+        update = {"attempts": attempts}
+        if attempts >= MFA_MAX_ATTEMPTS:
+            update["used_at"] = _now()
+        coll.update_one({"_id": doc["_id"]}, {"$set": update})
+        if attempts >= MFA_MAX_ATTEMPTS:
+            raise AuthError(401, "Too many wrong codes. Sign in again.", "mfa_expired")
         raise AuthError(401, "Invalid two-factor code", "mfa_invalid")
     coll.update_one({"_id": doc["_id"]}, {"$set": {"used_at": _now()}})
     first = "google" if user.get("firebase_uid") and str(user.get("password_hash", "")).startswith("!") else "pwd"
