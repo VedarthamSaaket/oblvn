@@ -1,3 +1,4 @@
+import math
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -96,10 +97,14 @@ def test_drive_health_train_and_score(models_dir, tmp_path):
     df["date"] = pd.date_range("2024-01-01", periods=n, freq="h")
     df["serial_number"] = [f"S{i % 400}" for i in range(n)]
     df["model"] = "TEST"
+    df["maker"] = "other"
+    df["weight"] = np.where(label, 1.0, 1.0)
     path = tmp_path / "dh.parquet"
     df.to_parquet(path)
     meta = drive_health.train(path)
     assert meta["holdout"]["average_precision"] > 0.5
+    assert meta["promotion"]["decision"] == "promoted" and meta["calibration_table"]
+    assert 0 <= meta["holdout"]["brier"] < meta["uncalibrated_brier"] + 0.05
     bad = {"attributes": [{"id": 5, "raw": "300"}, {"id": 197, "raw": "40"}, {"id": 9, "raw": "2"},
                           {"id": 1, "raw": "1"}, {"id": 194, "raw": "3"}]}
     found = drive_health.score("SER", bad)
@@ -148,3 +153,19 @@ def test_drive_health_skips_ssd_and_nvme():
     assert not drive_health.is_hard_drive({"rotation_rate": "Solid State Device", "attributes": [1]})
     assert not drive_health.is_hard_drive({"nvme": {"percentage_used": 3}, "attributes": []})
     assert drive_health.score("SSD", {"rotation_rate": 0, "attributes": [{"id": 5, "raw": "900"}] * 5}) == []
+
+
+def test_smart_row_trends_from_history():
+    from ml.features import manufacturer, smart_row
+    now = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    snap = {"model": "ST16000NM001G", "attributes": [{"id": 5, "raw": "120"}, {"id": 197, "raw": "8"}]}
+    history = [
+        {"captured_at": (now - timedelta(days=7)).isoformat(), "snapshot": {"attributes": [{"id": 5, "raw": "20"}]}},
+        {"captured_at": (now - timedelta(days=30)).isoformat(),
+         "snapshot": {"attributes": [{"id": 5, "raw": "0"}, {"id": 197, "raw": "0"}]}},
+    ]
+    row = smart_row(snap, 16 * 2 ** 40, history, now)
+    assert row["smart_5_delta_7d"] == 100 and row["smart_5_delta_30d"] == 120 and row["smart_197_delta_30d"] == 8
+    assert row["maker_seagate"] == 1.0 and math.isnan(row["smart_197_delta_7d"])
+    assert manufacturer("HGST HUH721212ALN604") == "hgst" and manufacturer("WUH721816ALE6L4") == "wdc"
+    assert manufacturer("TOSHIBA MG07ACA14TA") == "toshiba" and manufacturer("CT1000MX500SSD1") == "other"
