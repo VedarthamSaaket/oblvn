@@ -207,16 +207,57 @@ def _login_history(user_id: str, limit: int = 100) -> list[dict]:
     return r.data or []
 
 
+def _geo(ip: str | None) -> dict | None:
+    try:
+        from ml import geo
+        return geo.lookup(ip)
+    except Exception:
+        return None
+
+
 def check_new_ip(user_id: str, org_id: str | None, current_ip: str) -> dict | None:
     history = _login_history(user_id, 50)[1:]
     known = {_payload(e).get("ip_address") for e in history} - {None}
     if known and current_ip not in known:
+        here = _geo(current_ip) or {}
+        countries = {g.get("country") for g in (_geo(i) for i in known) if g}
+        new_country = bool(here.get("country") and countries and here["country"] not in countries)
         return _record_anomaly(
-            "new_ip_login", "medium", None,
-            {"new_ip": current_ip, "known_ips": sorted(known)[:5]},
+            "new_ip_login", "high" if new_country else "medium", None,
+            {"new_ip": current_ip, "known_ips": sorted(known)[:5], "country": here.get("country"),
+             "city": here.get("city"), "asn": here.get("asn"), "asn_org": here.get("asn_org"),
+             "new_country": new_country, "known_countries": sorted(c for c in countries if c)},
             org_id, user_id, dedupe_key=f"new_ip:{user_id}:{current_ip}",
         )
     return None
+
+
+def check_impossible_travel(user_id: str, org_id: str | None, current_ip: str, at: datetime) -> dict | None:
+    history = _login_history(user_id, 5)[1:]
+    if not history:
+        return None
+    prev = history[0]
+    prev_ip = _payload(prev).get("ip_address")
+    prev_at = _parse_ts(prev.get("created_at"))
+    if not prev_ip or prev_ip == current_ip or not prev_at:
+        return None
+    try:
+        from ml import geo
+    except Exception:
+        return None
+    a, b = geo.lookup(prev_ip), geo.lookup(current_ip)
+    trip = geo.travel(a, b, (at - prev_at).total_seconds() / 3600)
+    if not trip or not trip["impossible"]:
+        return None
+    return _record_anomaly(
+        "impossible_travel", "high", None,
+        {"from_ip": prev_ip, "to_ip": current_ip,
+         "from": {"country": a.get("country"), "city": a.get("city")},
+         "to": {"country": b.get("country"), "city": b.get("city")},
+         "distance_km": trip["km"], "hours_between": trip["hours"], "implied_kmh": trip["kmh"],
+         "limit_kmh": geo.MAX_PLAUSIBLE_KMH},
+        org_id, user_id, dedupe_key=f"travel:{user_id}:{prev_ip}:{current_ip}",
+    )
 
 
 def circular_hour_stats(hours: list[float]) -> tuple[float, float]:

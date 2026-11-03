@@ -48,7 +48,7 @@ from backend import jobs, realtime
 from backend.agent_api import agent_devices, find_agent_device, router as agent_router
 from backend.anomaly import (
     acknowledge_anomaly, check_failed_logins, check_new_ip,
-    check_new_operator, check_off_hours_wipe,
+    check_impossible_travel, check_new_operator, check_off_hours_wipe,
     check_smart_anomalies, check_unusual_login_hour,
     compute_risk_score, run_statistical_batch, check_role_escalation,
     primary_org, score_login,
@@ -301,6 +301,7 @@ async def login(request: Request, body: AuthBody):
         now = datetime.now(timezone.utc)
         for check in (lambda: check_new_ip(user_id, org_id, ip),
                       lambda: check_unusual_login_hour(user_id, org_id, now),
+                      lambda: check_impossible_travel(user_id, org_id, ip, now),
                       lambda: score_login(user_id, org_id, ip, now)):
             try:
                 check()
