@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+mkdir -p /etc/oblvn-agent /var/lib/oblvn-agent/pending
+chmod 700 /etc/oblvn-agent
+systemctl mask getty@tty1.service
+systemctl enable oblvn-agent.service
